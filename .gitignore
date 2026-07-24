@@ -1,0 +1,14 @@
+node_modules/
+.daml/
+dist/
+build/
+.env
+.env.local
+*.pem
+*.key
+*.log
+.DS_Store
+.next/
+coverage/
+
+.claude/

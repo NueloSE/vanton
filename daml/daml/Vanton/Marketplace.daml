@@ -1,0 +1,212 @@
+-- Vanton — agent-payment marketplace on Canton.
+--
+-- The heart of the product lives here: an AgentMandate is a spending allowance
+-- signed by an agent's owner. When the agent tries to pay for a service, the
+-- LEDGER itself checks the budget, per-call cap, and expiry inside
+-- `Mandate_Authorize`. An out-of-policy call does not get a soft "no" from our
+-- backend — the transaction fails on-ledger. That is the demo's money shot.
+--
+-- Privacy: every contract here is visible only to its signatories/observers.
+-- A third party (see Tests.daml) can query the ledger and see none of it —
+-- that is the "billing nobody else can see" claim, enforced by Canton, not us.
+
+module Vanton.Marketplace where
+
+-- Assets we settle in. Kept as Text for the MVP; the gateway maps these to the
+-- CIP-56 instrument ids (Amulet/CC, cBTC, cETH) when it drives x402 settlement.
+-- CC | cBTC | cETH
+type Asset = Text
+
+--------------------------------------------------------------------------------
+-- Provider listings ("the shop")
+--------------------------------------------------------------------------------
+
+-- A provider proposes a listing; the operator accepts it onto the marketplace.
+template ServiceListingProposal
+  with
+    operator : Party
+    provider : Party
+    name : Text
+    endpointUrl : Text
+    priceAmount : Decimal
+    priceAsset : Asset
+    category : Text
+  where
+    signatory provider
+    observer operator
+
+    choice ServiceListingProposal_Accept : ContractId ServiceListing
+      controller operator
+      do
+        create ServiceListing with
+          operator; provider; name; endpointUrl
+          priceAmount; priceAsset; category; active = True
+
+    choice ServiceListingProposal_Reject : ()
+      controller operator
+      do pure ()
+
+template ServiceListing
+  with
+    operator : Party
+    provider : Party
+    name : Text
+    endpointUrl : Text
+    priceAmount : Decimal
+    priceAsset : Asset
+    category : Text
+    active : Bool
+  where
+    signatory operator, provider
+
+    -- Provider can toggle availability or reprice.
+    choice ServiceListing_SetActive : ContractId ServiceListing
+      with newActive : Bool
+      controller provider
+      do create this with active = newActive
+
+    choice ServiceListing_UpdatePrice : ContractId ServiceListing
+      with newPrice : Decimal
+      controller provider
+      do create this with priceAmount = newPrice
+
+--------------------------------------------------------------------------------
+-- Spending allowance ("the allowance") — the enforcement core
+--------------------------------------------------------------------------------
+
+-- Owner proposes an allowance for their agent; the agent accepts it.
+template MandateProposal
+  with
+    operator : Party
+    owner : Party
+    agent : Party
+    budgetTotal : Decimal
+    perCallCap : Decimal
+    asset : Asset
+    validUntil : Time
+  where
+    signatory owner
+    observer agent
+
+    choice MandateProposal_Accept : ContractId AgentMandate
+      controller agent
+      do
+        create AgentMandate with
+          operator; owner; agent
+          budgetTotal; budgetRemaining = budgetTotal
+          perCallCap; asset; validUntil
+
+    choice MandateProposal_Reject : ()
+      controller agent
+      do pure ()
+
+template AgentMandate
+  with
+    operator : Party
+    owner : Party
+    agent : Party
+    budgetTotal : Decimal
+    budgetRemaining : Decimal
+    perCallCap : Decimal
+    asset : Asset
+    validUntil : Time
+  where
+    signatory owner, agent
+
+    -- The agent asks to spend against the allowance. The ledger enforces the
+    -- policy: any failing assertion aborts the whole transaction — the agent
+    -- cannot overspend, spend after expiry, or exceed the per-call cap, even if
+    -- our backend is compromised or buggy. Returns the decremented mandate plus
+    -- a SpendAuthorization the gateway requires before it releases the service.
+    choice Mandate_Authorize : (ContractId AgentMandate, ContractId SpendAuthorization)
+      with
+        provider : Party
+        serviceName : Text
+        amount : Decimal
+      controller agent
+      do
+        now <- getTime
+        assertMsg "amount must be positive" (amount > 0.0)
+        assertMsg "amount exceeds per-call cap" (amount <= perCallCap)
+        assertMsg "amount exceeds remaining budget" (amount <= budgetRemaining)
+        assertMsg "mandate expired" (now < validUntil)
+        auth <- create SpendAuthorization with
+          operator; owner; agent; provider
+          serviceName; amount; asset; authorizedAt = now
+        newMandate <- create this with budgetRemaining = budgetRemaining - amount
+        pure (newMandate, auth)
+
+    -- Owner can add budget or revoke the allowance at any time.
+    choice Mandate_TopUp : ContractId AgentMandate
+      with additional : Decimal
+      controller owner
+      do
+        assertMsg "top-up must be positive" (additional > 0.0)
+        create this with
+          budgetTotal = budgetTotal + additional
+          budgetRemaining = budgetRemaining + additional
+
+    choice Mandate_Revoke : ()
+      controller owner
+      do pure ()
+
+-- Proof that a specific spend was authorized under a specific allowance.
+-- The gateway checks for one of these before it calls the x402 facilitator.
+-- Observed by provider + operator so the gateway can act on it; a third party
+-- is neither signatory nor observer and therefore cannot see it.
+template SpendAuthorization
+  with
+    operator : Party
+    owner : Party
+    agent : Party
+    provider : Party
+    serviceName : Text
+    amount : Decimal
+    asset : Asset
+    authorizedAt : Time
+  where
+    signatory owner, agent
+    observer provider, operator
+
+    -- The provider records that it fulfilled the call, consuming the auth and
+    -- issuing a private receipt (below).
+    choice SpendAuthorization_Fulfill : ContractId CallReceipt
+      with settlementRef : Text  -- x402 settlement tx reference
+      controller provider
+      do
+        create CallReceipt with
+          provider; owner; agent
+          serviceName; amount; asset
+          settledAt = authorizedAt; settlementRef
+
+--------------------------------------------------------------------------------
+-- Private metering record ("billing nobody else can see")
+--------------------------------------------------------------------------------
+
+-- Issued by the provider, observed only by the paying owner/agent. This is the
+-- confidential billing line. Nobody outside these three parties can see it —
+-- Canton enforces that at the ledger level, which is exactly what the
+-- transparent x402 chains (Base, Solana) cannot offer.
+template CallReceipt
+  with
+    provider : Party
+    owner : Party
+    agent : Party
+    serviceName : Text
+    amount : Decimal
+    asset : Asset
+    settledAt : Time
+    settlementRef : Text
+  where
+    signatory provider
+    observer owner, agent
+
+--------------------------------------------------------------------------------
+-- Operator bootstrap (marketplace root / access-control anchor)
+--------------------------------------------------------------------------------
+
+template Operator
+  with
+    operator : Party
+  where
+    signatory operator

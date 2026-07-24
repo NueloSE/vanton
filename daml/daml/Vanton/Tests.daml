@@ -1,0 +1,77 @@
+-- Vanton demo script — runs the three beats the judges will watch.
+--   BEAT 1: an agent spends against its allowance; the budget ticks down.
+--   BEAT 2: the third call exceeds the budget and the LEDGER refuses it.
+--   BEAT 3: an outside party queries the ledger and sees none of the billing.
+--
+-- Run once the SDK is installed:  cd daml && daml test
+-- (or `daml start` and run `setup` from the script view.)
+
+module Vanton.Tests where
+
+import Daml.Script
+import Vanton.Marketplace
+import DA.Time (days, addRelTime)
+
+setup : Script ()
+setup = do
+  operator <- allocateParty "Operator"
+  provider <- allocateParty "DataProvider"
+  owner    <- allocateParty "AgentOwner"
+  agent    <- allocateParty "Agent"
+  outsider <- allocateParty "Outsider"
+
+  -- Provider lists a paid API; the operator accepts it onto the marketplace.
+  propId <- submit provider do
+    createCmd ServiceListingProposal with
+      operator; provider
+      name = "canton-stats"
+      endpointUrl = "https://api.vanton.dev/stats"
+      priceAmount = 0.05
+      priceAsset = "cBTC"
+      category = "analytics"
+  _listingId <- submit operator do
+    exerciseCmd propId ServiceListingProposal_Accept
+
+  -- Owner grants the agent an allowance: 0.10 cBTC total, 0.05 per call, 1 day.
+  now <- getTime
+  let expiry = addRelTime now (days 1)
+  mpropId <- submit owner do
+    createCmd MandateProposal with
+      operator; owner; agent
+      budgetTotal = 0.10
+      perCallCap = 0.05
+      asset = "cBTC"
+      validUntil = expiry
+  mandateId <- submit agent do
+    exerciseCmd mpropId MandateProposal_Accept
+
+  -- BEAT 1 — two valid calls. Budget 0.10 -> 0.05 -> 0.00.
+  (mandateId2, _a1) <- submit agent do
+    exerciseCmd mandateId Mandate_Authorize with
+      provider; serviceName = "canton-stats"; amount = 0.05
+  (mandateId3, _a2) <- submit agent do
+    exerciseCmd mandateId2 Mandate_Authorize with
+      provider; serviceName = "canton-stats"; amount = 0.05
+
+  -- BEAT 2 — the money shot. Budget is exhausted; the ledger rejects the spend.
+  -- submitMustFail asserts the transaction is REJECTED on-ledger, not by us.
+  submitMustFail agent do
+    exerciseCmd mandateId3 Mandate_Authorize with
+      provider; serviceName = "canton-stats"; amount = 0.05
+
+  -- Owner tops the allowance up; now the same call succeeds — showing the
+  -- control is real and dynamic, not a one-way lock.
+  mandateId4 <- submit owner do
+    exerciseCmd mandateId3 Mandate_TopUp with additional = 0.05
+  (_mandateId5, _a3) <- submit agent do
+    exerciseCmd mandateId4 Mandate_Authorize with
+      provider; serviceName = "canton-stats"; amount = 0.05
+
+  -- BEAT 3 — privacy. The outsider is neither signatory nor observer of any
+  -- Vanton contract, so the ledger shows them nothing.
+  outsiderMandates <- query @AgentMandate outsider
+  outsiderReceipts <- query @CallReceipt outsider
+  assertMsg "outsider must not see any mandates" (null outsiderMandates)
+  assertMsg "outsider must not see any receipts" (null outsiderReceipts)
+
+  pure ()

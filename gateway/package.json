@@ -1,0 +1,25 @@
+{
+  "name": "vanton-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Vanton gateway: wraps a provider's API with x402 payment + an on-ledger spend-mandate check.",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ftptech/x402-canton-core": "^0.6.0",
+    "@ftptech/x402-canton-express": "^0.2.2",
+    "@ftptech/x402-canton-ledger": "^0.1.1",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0"
+  }
+}
