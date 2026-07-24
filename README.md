@@ -64,16 +64,19 @@ Test assets: cBTC faucet (`cbtc-faucet.bitsafe.finance`), cETH devnet form (see 
 
 ## Run
 
-Prereqs: Daml SDK 2.10.4 (`daml version`), a JDK 17 (the script engine needs a
-JVM — `export JAVA_HOME=...` to a JDK 17 if `daml test` reports no Java runtime),
-Node 20+.
+Prereqs: Daml SDK 3.4.11 (`daml version` — matches the Canton 3.5.x devnet node),
+a JDK 17 (the script engine needs a JVM — `export JAVA_HOME=...` if `daml test`
+reports no Java runtime), Node 20+.
+
+The DAML is split in two packages so the deployable DAR stays lean (no
+daml-script bloat on the shared participant): `daml/` = templates only,
+`daml-tests/` = the demo script.
 
 ```bash
-# 1. DAML: compile + run the demo script
-cd daml
-daml build          # -> .daml/dist/vanton-0.1.0.dar
-daml test            # runs Vanton.Tests:setup — all three beats pass
-                     #   expect: "Vanton/Tests.daml:setup: ok, 5 active contracts, 9 transactions."
+# 1. DAML: compile templates, then run the demo script
+cd daml && daml build          # -> .daml/dist/vanton-0.1.0.dar (deployable)
+cd ../daml-tests && daml test  # runs Vanton.Tests:setup — all three beats pass
+                               #   expect: "ok, 5 active contracts, 9 transactions."
 
 # 2. Gateway: install, configure, run
 cd ../gateway
