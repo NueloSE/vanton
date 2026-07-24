@@ -64,12 +64,16 @@ Test assets: cBTC faucet (`cbtc-faucet.bitsafe.finance`), cETH devnet form (see 
 
 ## Run
 
-Prereqs: Daml SDK (`daml version`), Node 20+.
+Prereqs: Daml SDK 2.10.4 (`daml version`), a JDK 17 (the script engine needs a
+JVM — `export JAVA_HOME=...` to a JDK 17 if `daml test` reports no Java runtime),
+Node 20+.
 
 ```bash
 # 1. DAML: compile + run the demo script
 cd daml
-daml test            # runs Vanton.Tests:setup — expect all three beats to pass
+daml build          # -> .daml/dist/vanton-0.1.0.dar
+daml test            # runs Vanton.Tests:setup — all three beats pass
+                     #   expect: "Vanton/Tests.daml:setup: ok, 5 active contracts, 9 transactions."
 
 # 2. Gateway: install, configure, run
 cd ../gateway
