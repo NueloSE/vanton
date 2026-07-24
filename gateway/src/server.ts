@@ -1,31 +1,29 @@
 /**
  * Vanton gateway.
  *
- * Wraps a provider's paid API with TWO gates, in order:
- *   1. Mandate gate (ours)  — the agent's on-ledger allowance must authorize the
- *                             spend, or we return 403 and never charge.
- *   2. Payment gate (x402)  — FTP's `cantonPaymentMiddleware` runs the 402
- *                             challenge and settles the payment via the
- *                             facilitator, one transaction on Canton.
+ * Wraps a provider's paid API with two gates, in order:
+ *   1. Mandate gate (on-ledger allowance) — once the Vanton DAR is deployed,
+ *      the agent's spend must be authorized by its AgentMandate or we 403
+ *      without charging. Until then, enabled only when VANTON_PACKAGE_ID is set.
+ *   2. Payment gate — PAY_MODE selects the rail:
+ *        devnet (default): our 402 challenge, settled by a real CC transfer on
+ *                          the hackathon node, verified in the merchant wallet.
+ *        x402:             FTP facilitator middleware (mainnet transfer-factory).
  *
- * The paid handler only runs after BOTH gates pass. The payment mechanics follow
- * the x402-canton reference (scheme "exact", method "transfer-factory",
- * CIP-56 Token Standard). Merchant must self-provision a TransferPreapproval once:
- *     npx @ftptech/canton-agent-wallet preapproval
+ * Also serves the marketplace data endpoints (/listings, /activity) that the
+ * UI reads.
  */
 
 import "dotenv/config";
 import express from "express";
-import { cantonPaymentMiddleware } from "@ftptech/x402-canton-express";
-import type { PaymentRequirements } from "@ftptech/x402-canton-core";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
+import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 
 const PORT = Number(process.env.PORT ?? 3402);
-const NETWORK = (process.env.NETWORK ?? "canton:mainnet") as PaymentRequirements["network"];
-const FACILITATOR_URL = (process.env.FACILITATOR_URL ?? "https://facilitator.ftptech.xyz").replace(/\/$/, "");
-const AMOUNT = process.env.X402_AMOUNT ?? "100000000"; // atomic units; 1 CC = 10^10
+const PAY_MODE = process.env.PAY_MODE ?? "devnet";
+const PRICE_CC = process.env.PRICE_CC ?? "0.01";
 
-function required(name: string): string {
+function requireEnv(name: string): string {
   const v = process.env[name];
   if (!v) {
     console.error(`Missing required env var ${name} — see .env.example`);
@@ -34,93 +32,112 @@ function required(name: string): string {
   return v;
 }
 
-const MERCHANT_PARTY = required("CANTON_X402_PAYTO");
-const FACILITATOR_PARTY = required("CANTON_X402_FACILITATOR");
-const DSO_PARTY = required("CANTON_X402_DSO");
-const SYNCHRONIZER_ID = required("CANTON_SYNCHRONIZER_ID");
-const EXECUTE_BEFORE_SECONDS = Number(process.env.EXECUTE_BEFORE_SECONDS ?? 120);
-
-const mandateCfg: MandateCheckConfig = {
-  ledgerApiUrl: required("LEDGER_API_URL").replace(/\/$/, ""),
-  bearerToken: required("LEDGER_BEARER_TOKEN"),
-  operatorParty: required("VANTON_OPERATOR_PARTY"),
-  agentParty: required("VANTON_AGENT_PARTY"),
-  packageId: process.env.VANTON_PACKAGE_ID ?? "vanton", // set after daml build/upload
-};
-
-// The 402 challenge for our demo service.
-const statsRequirements: PaymentRequirements = {
-  scheme: "exact",
-  network: NETWORK,
-  amount: AMOUNT,
-  asset: `${DSO_PARTY}::Amulet`,
-  payTo: MERCHANT_PARTY,
-  maxTimeoutSeconds: 120,
-  extra: {
-    assetTransferMethod: "transfer-factory",
-    feePayer: FACILITATOR_PARTY,
-    synchronizerId: SYNCHRONIZER_ID,
-    instrumentId: { admin: DSO_PARTY, id: "Amulet" },
-    executeBeforeSeconds: EXECUTE_BEFORE_SECONDS,
-  },
-};
+const MERCHANT_PARTY = requireEnv("CANTON_X402_PAYTO");
 
 const app = express();
 app.use(express.json());
 
-/**
- * GATE 1 — mandate check. Runs before the payment middleware. The agent presents
- * its mandate contract id and the spend amount; the ledger decides.
- */
+// ---------------------------------------------------------------------------
+// Marketplace data (free endpoints; the UI reads these)
+// ---------------------------------------------------------------------------
+
+const listings = [
+  {
+    id: "canton-stats",
+    name: "Canton Stats API",
+    provider: MERCHANT_PARTY,
+    priceAmount: PRICE_CC,
+    priceAsset: "CC",
+    category: "analytics",
+    endpoint: "/stats",
+    description: "Live Canton network stats, priced per call.",
+  },
+];
+
+app.get("/listings", (_req, res) => res.json({ listings }));
+app.get("/activity", (_req, res) => res.json({ activity: activityFeed() }));
+app.get("/health", (_req, res) => res.json({ ok: true, payMode: PAY_MODE }));
+
+// ---------------------------------------------------------------------------
+// GATE 1 — on-ledger mandate (activates when the DAR is deployed)
+// ---------------------------------------------------------------------------
+
+const mandateEnabled = Boolean(process.env.VANTON_PACKAGE_ID);
+const mandateCfg: MandateCheckConfig | null = mandateEnabled
+  ? {
+      ledgerApiUrl: requireEnv("LEDGER_API_URL").replace(/\/$/, ""),
+      bearerToken: "", // TODO: fetch per-request via auth.ts once DAR is live
+      operatorParty: requireEnv("VANTON_OPERATOR_PARTY"),
+      agentParty: requireEnv("VANTON_AGENT_PARTY"),
+      packageId: process.env.VANTON_PACKAGE_ID!,
+    }
+  : null;
+
 app.use("/stats", async (req, res, next) => {
-  const mandateCid = req.header("X-VANTON-MANDATE");
-  if (!mandateCid) {
-    return res.status(400).json({ error: "missing X-VANTON-MANDATE header" });
-  }
-  const result = await authorizeSpend(
-    mandateCfg,
-    mandateCid,
-    MERCHANT_PARTY,
-    "canton-stats",
-    process.env.X402_AMOUNT_HUMAN ?? "0.01",
-  );
+  if (!mandateCfg) return next(); // pre-DAR: payment gate only
+  const mandateCid = req.header("x-vanton-mandate");
+  if (!mandateCid) return res.status(400).json({ error: "missing x-vanton-mandate header" });
+  const result = await authorizeSpend(mandateCfg, mandateCid, MERCHANT_PARTY, "canton-stats", PRICE_CC);
   if (!result.ok) {
-    // The ledger refused — the money shot. No payment is attempted.
     return res.status(403).json({ error: "mandate denied", reason: result.reason });
   }
-  res.locals.authorizationCid = result.authorizationCid;
   next();
 });
 
-// GATE 2 — x402 payment. Only reached once the mandate authorized the spend.
-app.use(
-  cantonPaymentMiddleware({
-    routes: {
-      "GET /stats": {
-        accepts: [statsRequirements],
-        description: "Canton network stats (Scan-derived)",
-        mimeType: "application/json",
-      },
-    },
-    facilitatorUrl: FACILITATOR_URL,
-  }),
-);
+// ---------------------------------------------------------------------------
+// GATE 2 — payment (devnet rail)
+// ---------------------------------------------------------------------------
 
-// Paid handler — reached only after mandate + payment both pass.
+if (PAY_MODE !== "devnet") {
+  console.error("[gateway] PAY_MODE=x402 (mainnet facilitator) is the post-hackathon rail; use devnet");
+  process.exit(1);
+}
+
+app.use("/stats", async (req, res, next) => {
+  const ref = req.header("x-vanton-payment");
+  if (!ref) {
+    // No payment yet — issue the paywall challenge.
+    const charge = issueCharge("canton-stats", PRICE_CC);
+    return res.status(402).json({
+      price: charge.price,
+      payTo: MERCHANT_PARTY,
+      asset: "CC",
+      reference: charge.reference,
+      instructions:
+        "Pay via Canton validator API transfer-preapproval/send with description=<reference>, then retry with header x-vanton-payment: <reference>",
+    });
+  }
+  // Payment claimed — verify it landed on-ledger. Settlement is fast but
+  // history indexing can lag a few seconds, so retry briefly.
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const settledCharge = await verifyCharge(ref);
+    if (settledCharge) {
+      console.log(
+        `[gateway] verified ${settledCharge.price} CC for ${settledCharge.service} (${ref}) event ${settledCharge.eventId.slice(0, 18)}…`,
+      );
+      return next();
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+  return res.status(402).json({ error: "payment not found on-ledger", reference: ref });
+});
+
+// ---------------------------------------------------------------------------
+// The paid resource
+// ---------------------------------------------------------------------------
+
 app.get("/stats", (_req, res) => {
-  // Demo payload; wire to the Scan API for real network metrics.
   res.json({
     service: "canton-stats",
-    activeContracts: 128034,
-    txLast24h: 41211,
+    network: "hackcanton-01 devnet",
     generatedAt: new Date().toISOString(),
+    paid: true,
   });
 });
 
-app.get("/health", (_req, res) => res.json({ ok: true }));
-
 app.listen(PORT, () => {
-  console.log(`[vanton-gateway] :${PORT}  facilitator=${FACILITATOR_URL}`);
-  console.log(`  GET /stats   — mandate-gated + x402-paid`);
-  console.log(`  GET /health  — free`);
+  console.log(`[vanton-gateway] :${PORT} payMode=${PAY_MODE} price=${PRICE_CC} CC`);
+  console.log(`  GET /stats     — paid (mandate gate ${mandateEnabled ? "ON" : "off — pre-DAR"})`);
+  console.log(`  GET /listings  — free`);
+  console.log(`  GET /activity  — free`);
 });
