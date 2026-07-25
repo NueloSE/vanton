@@ -34,6 +34,7 @@ interface Settled {
   settledAt: string;
   eventId: string;
   sender?: string;
+  asset?: string;
 }
 
 type Phase = "loading" | "error" | "ready";
@@ -165,10 +166,13 @@ export default function Home() {
   }, [load]);
 
   const stats = useMemo(() => {
-    const volume = activity.reduce((s, x) => s + Number(x.price || 0), 0);
+    // Volume is CC-only (assets don't sum); per-asset totals live in the wallet strip.
+    const ccVolume = activity
+      .filter((x) => (x.asset ?? "CC") === "CC")
+      .reduce((s, x) => s + Number(x.price || 0), 0);
     return {
       calls: activity.length,
-      volume: volume.toFixed(2),
+      volume: ccVolume.toFixed(2),
       services: listings.length,
       latest: activity[0]?.settledAt,
     };
@@ -314,7 +318,7 @@ export default function Home() {
           <section aria-label="Live settlement activity" className="mt-10">
             <SectionTitle>Live activity</SectionTitle>
             <p className="mt-1 text-sm text-muted">
-              Every row is a real transaction on Canton devnet, verified in the merchant wallet.
+              Every row is a real transaction on Canton devnet, verified on-ledger before the service was served.
             </p>
             <div className="mt-4">
               {activity.length === 0 ? <EmptyActivity /> : <ActivityTable rows={activity} />}
@@ -492,7 +496,7 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
               </td>
               <td className="px-4 py-3 font-medium">{r.service}</td>
               <td className="px-4 py-3 font-mono tabular-nums">
-                <span className="text-good">{r.price}</span> <span className="text-muted">CC</span>
+                <span className="text-good">{r.price}</span> <span className="text-muted">{r.asset ?? "CC"}</span>
               </td>
               <td className="px-4 py-3 font-mono text-xs text-muted" title={r.sender}>
                 {shortParty(r.sender)}
