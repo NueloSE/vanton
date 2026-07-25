@@ -10,7 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "dotenv": "^16.4.5"
+    "dotenv": "^16.4.5",
+    "openai": "^6.49.0"
   },
   "devDependencies": {
     "@types/node": "^20.14.0",
