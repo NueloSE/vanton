@@ -21,6 +21,8 @@ import { payToken } from "./token-pay.js";
 
 const GATEWAY = (process.env.GATEWAY_URL ?? "http://localhost:3402").replace(/\/$/, "");
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
+// Concept B: the agent spends wrapped assets from its OWN funded wallet.
+const AGENT_PARTY = process.env.VANTON_AGENT_PARTY ?? "";
 
 const openai = new OpenAI(); // reads OPENAI_API_KEY
 
@@ -75,9 +77,9 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
 
   // Route settlement by the asset the provider priced the service in.
   if (ch.asset === "cBTC" || ch.asset === "cETH") {
-    const me = await getPartyId();
-    const updateId = await payToken(ch.asset, ch.price, me, ch.payTo); // wrapped-asset transfer
-    log(c.teal(`      ✓ settled ${ch.price} ${ch.asset} on-ledger (${updateId.slice(0, 12)}…)`));
+    const payer = AGENT_PARTY || (await getPartyId()); // spend from the agent's own wallet
+    const updateId = await payToken(ch.asset, ch.price, payer, ch.payTo);
+    log(c.teal(`      ✓ settled ${ch.price} ${ch.asset} from agent wallet (${updateId.slice(0, 12)}…)`));
   } else {
     await payDirect(ch.payTo, ch.price, ch.reference); // CC via validator API
     log(c.teal(`      ✓ paid ${ch.price} CC on-ledger`));
@@ -96,7 +98,7 @@ async function main() {
   const listings = await fetchListings();
 
   log(c.bold("\n  VANTON AI AGENT"));
-  log(c.dim(`  party ${party.slice(0, 20)}…  ·  wallet ${bal.unlocked} CC  ·  spend limit enforced on-ledger  ·  model ${MODEL}`));
+  log(c.dim(`  CC wallet ${party.slice(0, 16)}… (${bal.unlocked} CC) · cBTC/cETH from agent wallet ${AGENT_PARTY.slice(0, 16)}… · budgets enforced on-ledger · ${MODEL}`));
   log(c.bold(`\n  TASK: `) + task);
   log(c.dim(`\n  ${listings.length} services on the marketplace:`));
   for (const l of listings) log(c.dim(`    · ${l.name} (${l.id}) — ${l.priceAmount} ${l.priceAsset}: ${l.description}`));
