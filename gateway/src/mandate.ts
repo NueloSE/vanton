@@ -55,9 +55,10 @@ async function post(cfg: MandateCheckConfig, path: string, body: unknown): Promi
   });
 }
 
-/** The agent's current (unconsumed) AgentMandate contract, with its budget. */
+/** The agent's current (unconsumed) AgentMandate for a given asset, with its budget. */
 async function currentMandate(
   cfg: MandateCheckConfig,
+  asset: string,
 ): Promise<{ cid: string; budgetRemaining: string } | null> {
   const endRes = await fetch(`${cfg.ledgerApiUrl}/v2/state/ledger-end`, { headers: await headers(cfg) });
   const { offset } = (await endRes.json()) as { offset: number };
@@ -78,7 +79,7 @@ async function currentMandate(
   let best: { cid: string; budgetRemaining: string; n: number } | null = null;
   for (const c of acs) {
     const ce = c?.contractEntry?.JsActiveContract?.createdEvent;
-    if (ce?.templateId?.endsWith(":AgentMandate")) {
+    if (ce?.templateId?.endsWith(":AgentMandate") && ce.createArgument?.asset === asset) {
       const remaining = ce.createArgument?.budgetRemaining ?? "0";
       const n = Number(remaining);
       if (!best || n > best.n) best = { cid: ce.contractId, budgetRemaining: remaining, n };
@@ -96,9 +97,10 @@ export async function authorizeSpend(
   cfg: MandateCheckConfig,
   serviceName: string,
   amount: string,
+  asset: string,
 ): Promise<AuthorizeResult> {
-  const mandate = await currentMandate(cfg);
-  if (!mandate) return { ok: false, reason: "no active mandate for agent" };
+  const mandate = await currentMandate(cfg, asset);
+  if (!mandate) return { ok: false, reason: `no active ${asset} mandate for agent` };
 
   const res = await post(cfg, "/v2/commands/submit-and-wait-for-transaction", {
     commands: {
@@ -120,7 +122,7 @@ export async function authorizeSpend(
   });
 
   if (res.ok) {
-    const after = await currentMandate(cfg);
+    const after = await currentMandate(cfg, asset);
     return { ok: true, remaining: after?.budgetRemaining };
   }
   // A failed assertion in the choice (over budget / cap / expired) comes back as

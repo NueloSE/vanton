@@ -15,12 +15,13 @@
  */
 
 import "dotenv/config";
-import express from "express";
+import express, { type Response } from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 import { issueTokenCharge, verifyTokenCharge, tokenActivity } from "./token-verify.js";
 import { cantonStats } from "./canton-data.js";
 import { btcPrice, ethSignal } from "./prices.js";
+import { loadUserListings, saveUserListings } from "./listings-store.js";
 import { getAccessToken } from "./auth.js";
 
 const PORT = Number(process.env.PORT ?? 3402);
@@ -98,6 +99,33 @@ const TOKEN_SERVICES: Record<string, { asset: "cBTC" | "cETH"; price: string; bo
   "/btc-price": { asset: "cBTC", price: process.env.PRICE_CBTC ?? "0.001", body: btcPrice },
 };
 
+// On-ledger mandate config (one AgentMandate per asset) + a shared enforcement
+// helper used by every paid gate, so the ledger caps CC, cBTC and cETH alike.
+const mandateEnabled = Boolean(process.env.VANTON_PACKAGE_ID);
+const mandateCfg: MandateCheckConfig | null = mandateEnabled
+  ? {
+      ledgerApiUrl: requireEnv("LOCAL_LEDGER_API_URL").replace(/\/$/, ""),
+      operatorParty: requireEnv("VANTON_OPERATOR_PARTY"),
+      agentParty: requireEnv("VANTON_AGENT_PARTY"),
+      packageId: process.env.VANTON_PACKAGE_ID!,
+      getToken: process.env.MANDATE_AUTH === "true" ? getAccessToken : undefined,
+    }
+  : null;
+
+/** Authorize a spend against the per-asset mandate. Returns true if allowed (or
+ *  no mandate configured); otherwise responds 403 and returns false. */
+async function enforceMandate(res: Response, asset: string, service: string, price: string): Promise<boolean> {
+  if (!mandateCfg) return true;
+  const auth = await authorizeSpend(mandateCfg, service, price, asset);
+  if (!auth.ok) {
+    console.log(`[gateway] mandate DENIED (${asset}): ${auth.reason} (budget left ${auth.remaining})`);
+    res.status(403).json({ error: "mandate denied", reason: auth.reason, asset, budgetRemaining: auth.remaining });
+    return false;
+  }
+  console.log(`[gateway] mandate authorized (${asset}) · budget left ${auth.remaining}`);
+  return true;
+}
+
 app.get("/listings", (_req, res) => res.json({ listings }));
 
 // A provider lists a service. In production this is a ServiceListingProposal on
@@ -106,6 +134,15 @@ app.get("/listings", (_req, res) => res.json({ listings }));
 // meters. The provider party is the payee for that service.
 // user-listed services: id -> the provider's real API URL the gateway proxies to
 const targets = new Map<string, string>();
+const DEMO_IDS = new Set(["canton-stats", "eth-signal", "btc-price"]);
+
+// restore user-listed services from disk (demo listings are always seeded above)
+{
+  const persisted = loadUserListings();
+  for (const l of persisted.listings) if (!listings.some((x) => x.id === l.id)) listings.push(l);
+  for (const [id, url] of persisted.targets) targets.set(id, url);
+  if (persisted.listings.length) console.log(`[gateway] restored ${persisted.listings.length} user listing(s)`);
+}
 
 app.post("/listings", (req, res) => {
   const { name, provider, priceAmount, priceAsset, category, targetUrl, description } =
@@ -135,6 +172,7 @@ app.post("/listings", (req, res) => {
   };
   targets.set(id, String(targetUrl));
   listings.unshift(listing);
+  saveUserListings(listings.filter((l) => !DEMO_IDS.has(l.id)), targets);
   console.log(`[gateway] listed "${listing.name}" @ ${listing.priceAmount} ${listing.priceAsset} by ${listing.provider.slice(0, 24)}… -> ${targetUrl}`);
   res.status(201).json({ listing });
 });
@@ -149,6 +187,7 @@ app.get("/svc/:id", async (req, res) => {
   const ref = req.header("x-vanton-payment");
 
   if (!ref) {
+    if (!(await enforceMandate(res, listing.priceAsset, listing.id, listing.priceAmount))) return;
     const charge = isToken
       ? await issueTokenCharge(listing.id, listing.priceAsset as "cBTC" | "cETH", listing.priceAmount, listing.provider)
       : issueCharge(listing.id, listing.priceAmount);
@@ -199,6 +238,7 @@ for (const [path, svc] of Object.entries(TOKEN_SERVICES)) {
   app.use(path, async (req, res, next) => {
     const ref = req.header("x-vanton-payment");
     if (!ref) {
+      if (!(await enforceMandate(res, svc.asset, service, svc.price))) return;
       const charge = await issueTokenCharge(service, svc.asset, svc.price, PROVIDER_PARTY);
       return res.status(402).json({ price: charge.price, payTo: PROVIDER_PARTY, asset: svc.asset, reference: charge.reference });
     }
@@ -226,18 +266,6 @@ app.get("/health", (_req, res) => res.json({ ok: true, payMode: PAY_MODE }));
 // shared node once the package is installed). Enabled when VANTON_PACKAGE_ID set.
 // ---------------------------------------------------------------------------
 
-const mandateEnabled = Boolean(process.env.VANTON_PACKAGE_ID);
-const mandateCfg: MandateCheckConfig | null = mandateEnabled
-  ? {
-      ledgerApiUrl: requireEnv("LOCAL_LEDGER_API_URL").replace(/\/$/, ""),
-      operatorParty: requireEnv("VANTON_OPERATOR_PARTY"),
-      agentParty: requireEnv("VANTON_AGENT_PARTY"),
-      packageId: process.env.VANTON_PACKAGE_ID!,
-      // Shared devnet node needs auth; a local sandbox does not.
-      getToken: process.env.MANDATE_AUTH === "true" ? getAccessToken : undefined,
-    }
-  : null;
-
 if (PAY_MODE !== "devnet") {
   console.error("[gateway] PAY_MODE=x402 (mainnet facilitator) is the post-hackathon rail; use devnet");
   process.exit(1);
@@ -248,16 +276,7 @@ app.use("/stats", async (req, res, next) => {
 
   if (!ref) {
     // Initial request: enforce the on-ledger mandate BEFORE offering to charge.
-    if (mandateCfg) {
-      const auth = await authorizeSpend(mandateCfg, "canton-stats", PRICE_CC);
-      if (!auth.ok) {
-        console.log(`[gateway] mandate DENIED: ${auth.reason} (budget left ${auth.remaining})`);
-        return res
-          .status(403)
-          .json({ error: "mandate denied", reason: auth.reason, budgetRemaining: auth.remaining });
-      }
-      console.log(`[gateway] mandate authorized · budget left ${auth.remaining} CC`);
-    }
+    if (!(await enforceMandate(res, "CC", "canton-stats", PRICE_CC))) return;
     const charge = issueCharge("canton-stats", PRICE_CC);
     return res.status(402).json({
       price: charge.price,

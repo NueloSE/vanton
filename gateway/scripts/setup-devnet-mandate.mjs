@@ -55,7 +55,7 @@ async function submit(actAs, command) {
   });
 }
 
-async function activeCid(party, endsWith) {
+async function activeCid(party, endsWith, asset) {
   const { offset } = await j("/v2/state/ledger-end");
   const acs = await j("/v2/state/active-contracts", {
     method: "POST",
@@ -63,30 +63,37 @@ async function activeCid(party, endsWith) {
   });
   for (const c of acs) {
     const ce = c?.contractEntry?.JsActiveContract?.createdEvent;
-    if (ce?.templateId?.endsWith(endsWith)) return ce.contractId;
+    if (ce?.templateId?.endsWith(endsWith) && (!asset || ce.createArgument?.asset === asset)) return ce.contractId;
   }
   return null;
 }
 
+// One AgentMandate per asset, so the ledger caps CC, cBTC AND cETH spending.
 const validUntil = new Date(Date.now() + 365 * 24 * 3600 * 1000).toISOString();
-await submit(P("owner"), {
-  CreateCommand: {
-    templateId: `${PKG}:Vanton.Marketplace:MandateProposal`,
-    createArguments: { operator: P("operator"), owner: P("owner"), agent: P("agent"), budgetTotal: BUDGET, perCallCap: PER_CALL, asset: "CC", validUntil },
-  },
-});
-const proposal = await activeCid(P("owner"), ":MandateProposal");
-if (!proposal) throw new Error("proposal not found");
-await submit(P("agent"), {
-  ExerciseCommand: { templateId: `${PKG}:Vanton.Marketplace:MandateProposal`, contractId: proposal, choice: "MandateProposal_Accept", choiceArgument: {} },
-});
-const mandate = await activeCid(P("agent"), ":AgentMandate");
-if (!mandate) throw new Error("mandate not found");
+const ASSETS = [
+  { asset: "CC", budget: process.env.BUDGET_CC ?? "0.05", perCall: process.env.PER_CALL_CC ?? "0.02" },
+  { asset: "cBTC", budget: process.env.BUDGET_CBTC ?? "0.005", perCall: process.env.PER_CALL_CBTC ?? "0.002" },
+  { asset: "cETH", budget: process.env.BUDGET_CETH ?? "0.05", perCall: process.env.PER_CALL_CETH ?? "0.02" },
+];
 
-console.error(`AgentMandate on SHARED devnet — budget ${BUDGET} CC, per-call ${PER_CALL} CC\n`);
+for (const { asset, budget, perCall } of ASSETS) {
+  await submit(P("owner"), {
+    CreateCommand: {
+      templateId: `${PKG}:Vanton.Marketplace:MandateProposal`,
+      createArguments: { operator: P("operator"), owner: P("owner"), agent: P("agent"), budgetTotal: budget, perCallCap: perCall, asset, validUntil },
+    },
+  });
+  const proposal = await activeCid(P("owner"), ":MandateProposal", asset);
+  if (!proposal) throw new Error(`${asset} proposal not found`);
+  await submit(P("agent"), {
+    ExerciseCommand: { templateId: `${PKG}:Vanton.Marketplace:MandateProposal`, contractId: proposal, choice: "MandateProposal_Accept", choiceArgument: {} },
+  });
+  console.error(`  ${asset}: budget ${budget}, per-call ${perCall}`);
+}
+
+console.error(`\nAgentMandates on SHARED devnet (CC + cBTC + cETH)\n`);
 console.log(`VANTON_PACKAGE_ID=${PKG}`);
 console.log(`LOCAL_LEDGER_API_URL=${LEDGER}`);
 console.log(`MANDATE_AUTH=true`);
 console.log(`VANTON_OPERATOR_PARTY=${P("operator")}`);
 console.log(`VANTON_AGENT_PARTY=${P("agent")}`);
-console.log(`VANTON_MANDATE_CID=${mandate}`);
