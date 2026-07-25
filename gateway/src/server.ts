@@ -18,6 +18,7 @@ import "dotenv/config";
 import express from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
+import { issueTokenCharge, verifyTokenCharge, tokenActivity } from "./token-verify.js";
 import { cantonStats } from "./canton-data.js";
 import { getAccessToken } from "./auth.js";
 
@@ -51,6 +52,11 @@ app.use((req, res, next) => {
 // Marketplace data (free endpoints; the UI reads these)
 // ---------------------------------------------------------------------------
 
+// The provider party that receives wrapped-asset payments (cBTC/cETH).
+const PROVIDER_PARTY =
+  process.env.VANTON_PROVIDER_PARTY ??
+  "vanton-provider::122003aa7c491e00a453145c4d2cd3dbf5db8908b4e663c9944baed57fd66effa668";
+
 const listings = [
   {
     id: "canton-stats",
@@ -62,7 +68,34 @@ const listings = [
     endpoint: "/stats",
     description: "Live Canton network stats, priced per call.",
   },
+  {
+    id: "eth-signal",
+    name: "ETH Signal (premium)",
+    provider: PROVIDER_PARTY,
+    priceAmount: process.env.PRICE_CETH ?? "0.01",
+    priceAsset: "cETH",
+    category: "signals",
+    endpoint: "/eth-signal",
+    description: "A signed ETH momentum signal, settled in cETH per call.",
+  },
+  {
+    id: "btc-price",
+    name: "BTC Price Oracle",
+    provider: PROVIDER_PARTY,
+    priceAmount: process.env.PRICE_CBTC ?? "0.001",
+    priceAsset: "cBTC",
+    category: "oracle",
+    endpoint: "/btc-price",
+    description: "A signed BTC/USD price, settled in cBTC per call.",
+  },
 ];
+
+// Wrapped-asset services: (endpoint, asset, price, response). Both settle in a
+// registry token to PROVIDER_PARTY via the same verify path.
+const TOKEN_SERVICES: Record<string, { asset: "cBTC" | "cETH"; price: string; body: () => object }> = {
+  "/eth-signal": { asset: "cETH", price: process.env.PRICE_CETH ?? "0.01", body: () => ({ service: "eth-signal", signal: "ETH momentum: neutral→up", paidIn: "cETH" }) },
+  "/btc-price": { asset: "cBTC", price: process.env.PRICE_CBTC ?? "0.001", body: () => ({ service: "btc-price", btcUsd: 64231.5, paidIn: "cBTC" }) },
+};
 
 app.get("/listings", (_req, res) => res.json({ listings }));
 
@@ -98,7 +131,38 @@ app.post("/listings", (req, res) => {
   res.status(201).json({ listing });
 });
 
-app.get("/activity", (_req, res) => res.json({ activity: activityFeed() }));
+app.get("/activity", (_req, res) => {
+  // Merge CC settlements + wrapped-asset settlements, newest first.
+  const cc = activityFeed().map((s) => ({ ...s, asset: "CC" }));
+  const tok = tokenActivity().map((s) => ({ reference: s.reference, price: s.price, service: s.service, settledAt: s.settledAt, eventId: "token-transfer", sender: "agent", asset: s.asset }));
+  const activity = [...cc, ...tok].sort((a, b) => (a.settledAt < b.settledAt ? 1 : -1));
+  res.json({ activity });
+});
+
+// Wrapped-asset paid services (cBTC / cETH). Each settles in a registry token to
+// PROVIDER_PARTY: the initial request issues a token 402; the retry verifies the
+// provider actually received the asset (balance check) before serving. Same shape
+// as the CC /stats path, just a different settlement rail.
+for (const [path, svc] of Object.entries(TOKEN_SERVICES)) {
+  const service = path.slice(1);
+  app.use(path, async (req, res, next) => {
+    const ref = req.header("x-vanton-payment");
+    if (!ref) {
+      const charge = await issueTokenCharge(service, svc.asset, svc.price, PROVIDER_PARTY);
+      return res.status(402).json({ price: charge.price, payTo: PROVIDER_PARTY, asset: svc.asset, reference: charge.reference });
+    }
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const s = await verifyTokenCharge(ref);
+      if (s) {
+        console.log(`[gateway] verified ${s.price} ${svc.asset} for ${service} (${ref})`);
+        return next();
+      }
+      await new Promise((r) => setTimeout(r, 2000));
+    }
+    return res.status(402).json({ error: `${svc.asset} payment not found on-ledger`, reference: ref });
+  });
+  app.get(path, (_req, res) => res.json({ ...svc.body(), generatedAt: new Date().toISOString() }));
+}
 app.get("/health", (_req, res) => res.json({ ok: true, payMode: PAY_MODE }));
 
 // ---------------------------------------------------------------------------

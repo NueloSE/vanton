@@ -17,6 +17,7 @@
 import "dotenv/config";
 import OpenAI from "openai";
 import { getBalance, getPartyId, payDirect } from "./canton.js";
+import { payToken } from "./token-pay.js";
 
 const GATEWAY = (process.env.GATEWAY_URL ?? "http://localhost:3402").replace(/\/$/, "");
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
@@ -69,11 +70,20 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
   }
   if (challengeRes.status !== 402) return { ok: false, error: `expected 402, got ${challengeRes.status}` };
 
-  const ch = (await challengeRes.json()) as { price: string; payTo: string; reference: string };
-  log(c.dim(`      402 → pay ${ch.price} CC to ${ch.payTo.slice(0, 16)}…`));
-  await payDirect(ch.payTo, ch.price, ch.reference);
-  spent += Number(listing.priceAmount);
-  log(c.teal(`      ✓ paid ${ch.price} CC on-ledger  ·  spent ${spent.toFixed(3)} CC`));
+  const ch = (await challengeRes.json()) as { price: string; payTo: string; asset: string; reference: string };
+  log(c.dim(`      402 → pay ${ch.price} ${ch.asset} to ${ch.payTo.slice(0, 16)}…`));
+
+  // Route settlement by the asset the provider priced the service in.
+  if (ch.asset === "cBTC" || ch.asset === "cETH") {
+    const me = await getPartyId();
+    const updateId = await payToken(ch.asset, ch.price, me, ch.payTo); // wrapped-asset transfer
+    log(c.teal(`      ✓ settled ${ch.price} ${ch.asset} on-ledger (${updateId.slice(0, 12)}…)`));
+  } else {
+    await payDirect(ch.payTo, ch.price, ch.reference); // CC via validator API
+    log(c.teal(`      ✓ paid ${ch.price} CC on-ledger`));
+  }
+
+  // The gateway verifies by the charge reference (for both rails).
   const dataRes = await fetch(url, { headers: { "x-vanton-payment": ch.reference } });
   if (!dataRes.ok) return { ok: false, error: `retry failed ${dataRes.status}` };
   return { ok: true, data: await dataRes.text() };
