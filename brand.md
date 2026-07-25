@@ -39,10 +39,13 @@ no exclamation marks in product UI.
 
 ## Logo
 
-The logo (founder's choice) is the multicolor echelon mark: orange + sky pills,
-crimson circle, royal overlap lens, on black — sources in `branding/`. It lives on
-black surfaces (project page, socials, video title card). The product UI keeps the
-dark/amber palette above; the logo's colors are not UI tokens.
+The logo (founder's choice) is `branding/logo.png` — the multicolor echelon mark
+(orange + sky pills, crimson circle, royal overlap lens) with the white VANTON
+wordmark, on black. This one file is the logo everywhere: README header, the
+marketplace UI header, the browser favicon (`marketplace/app/icon.png`, derived
+from it), the hackathon project page, socials, and the video title card. It lives
+on black/near-black surfaces. The product UI keeps the dark/amber palette above;
+the logo's colors are not UI tokens.
 
 ## Motif
 

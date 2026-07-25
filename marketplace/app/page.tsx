@@ -149,11 +149,13 @@ export default function Home() {
 function Header({ live, lastFetch }: { live: boolean; lastFetch: Date | null }) {
   return (
     <header className="flex flex-wrap items-center justify-between gap-4">
-      <div>
+      <div className="flex flex-col gap-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img src="/logo.png" alt="Vanton" className="h-11 w-auto" />
         <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">
           Agent payments on Canton
         </p>
-        <h1 className="mt-1 text-3xl font-extrabold tracking-tight md:text-4xl">Vanton</h1>
+        <h1 className="sr-only">Vanton</h1>
       </div>
       <div className="flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5">
         <span

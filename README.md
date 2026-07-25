@@ -1,4 +1,8 @@
-# Vanton — the agent-payment marketplace on Canton
+<p align="center">
+  <img src="branding/logo.png" alt="Vanton" width="520" />
+</p>
+
+<h1 align="center">Vanton — the agent-payment marketplace on Canton</h1>
 
 **AI agents are becoming the fastest-growing API customers, but they can't pay for anything — no card, no account, no subscription.** Vanton is a Canton-native marketplace and payment layer where agents discover services and pay per call in **CC, cBTC, and cETH** over Canton's x402 rails, with spending limits **enforced directly by the ledger**.
 
