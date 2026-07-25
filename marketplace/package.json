@@ -10,6 +10,8 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
+    "@canton-network/dapp-sdk": "^1.4.0",
+    "@walletconnect/sign-client": "^2.23.10",
     "lucide-react": "^0.454.0",
     "next": "^15.1.0",
     "react": "^19.0.0",

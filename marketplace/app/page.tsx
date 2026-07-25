@@ -53,7 +53,40 @@ export default function Home() {
   const [activity, setActivity] = useState<Settled[]>([]);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
   const [showList, setShowList] = useState(false);
+  const [walletParty, setWalletParty] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState(false);
+  const [walletError, setWalletError] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Connect a Canton wallet (Console Wallet et al.) via the official dApp SDK.
+  // Loaded lazily — it's a browser-only SDK (web components), so it must never
+  // run during SSR.
+  const connectWallet = useCallback(async () => {
+    setConnecting(true);
+    setWalletError(null);
+    try {
+      const sdk = await import("@canton-network/dapp-sdk");
+      await sdk.connect();
+      const accounts = await sdk.listAccounts();
+      const party = accounts?.[0]?.partyId;
+      if (!party) throw new Error("Wallet returned no account");
+      setWalletParty(party);
+    } catch (e) {
+      setWalletError((e as Error)?.message || "Wallet connection failed");
+    } finally {
+      setConnecting(false);
+    }
+  }, []);
+
+  const disconnectWallet = useCallback(async () => {
+    try {
+      const sdk = await import("@canton-network/dapp-sdk");
+      await sdk.disconnect?.();
+    } catch {
+      /* ignore */
+    }
+    setWalletParty(null);
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -90,7 +123,15 @@ export default function Home() {
 
   return (
     <main className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-12">
-      <Header live={phase === "ready"} lastFetch={lastFetch} />
+      <Header
+        live={phase === "ready"}
+        lastFetch={lastFetch}
+        walletParty={walletParty}
+        connecting={connecting}
+        walletError={walletError}
+        onConnect={connectWallet}
+        onDisconnect={disconnectWallet}
+      />
 
       {phase === "loading" && <PageSkeleton />}
 
@@ -158,6 +199,7 @@ export default function Home() {
       {showList && (
         <ListServiceModal
           gateway={GATEWAY}
+          defaultProvider={walletParty ?? ""}
           onClose={() => setShowList(false)}
           onListed={() => {
             setShowList(false);
@@ -169,9 +211,25 @@ export default function Home() {
   );
 }
 
-function Header({ live, lastFetch }: { live: boolean; lastFetch: Date | null }) {
+function Header({
+  live,
+  lastFetch,
+  walletParty,
+  connecting,
+  walletError,
+  onConnect,
+  onDisconnect,
+}: {
+  live: boolean;
+  lastFetch: Date | null;
+  walletParty: string | null;
+  connecting: boolean;
+  walletError: string | null;
+  onConnect: () => void;
+  onDisconnect: () => void;
+}) {
   return (
-    <header className="flex flex-wrap items-center justify-between gap-4">
+    <header className="flex flex-wrap items-start justify-between gap-4">
       <div className="flex flex-col gap-2">
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img src="/logo.png" alt="Vanton" className="h-12 w-auto md:h-14" />
@@ -180,16 +238,40 @@ function Header({ live, lastFetch }: { live: boolean; lastFetch: Date | null }) 
         </p>
         <h1 className="sr-only">Vanton</h1>
       </div>
-      <div className="flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5">
-        <span
-          className={`pulse-dot h-2 w-2 rounded-full ${live ? "bg-good" : "bg-muted"}`}
-          aria-hidden
-        />
-        <span className="font-mono text-xs text-muted">
-          {live
-            ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}`
-            : "connecting…"}
-        </span>
+      <div className="flex flex-col items-end gap-2">
+        <div className="flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5">
+          <span
+            className={`pulse-dot h-2 w-2 rounded-full ${live ? "bg-good" : "bg-muted"}`}
+            aria-hidden
+          />
+          <span className="font-mono text-xs text-muted">
+            {live
+              ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}`
+              : "connecting…"}
+          </span>
+        </div>
+        {walletParty ? (
+          <button
+            onClick={onDisconnect}
+            title={walletParty}
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-good/40 bg-good/10 px-3 text-sm font-medium text-good focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-good focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+          >
+            <span className="h-2 w-2 rounded-full bg-good" aria-hidden />
+            <span className="font-mono text-xs">{shortParty(walletParty)}</span>
+            <span className="text-muted">·</span>
+            <span className="text-xs">Disconnect</span>
+          </button>
+        ) : (
+          <button
+            onClick={onConnect}
+            disabled={connecting}
+            className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-panel px-4 text-sm font-medium text-text hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+          >
+            <Wallet className="h-4 w-4" aria-hidden />
+            {connecting ? "Connecting…" : "Connect wallet"}
+          </button>
+        )}
+        {walletError && <p className="max-w-56 text-right text-xs text-bad">{walletError}</p>}
       </div>
     </header>
   );
@@ -307,16 +389,18 @@ function EmptyActivity() {
 
 function ListServiceModal({
   gateway,
+  defaultProvider,
   onClose,
   onListed,
 }: {
   gateway: string;
+  defaultProvider: string;
   onClose: () => void;
   onListed: () => void;
 }) {
   const [form, setForm] = useState({
     name: "",
-    provider: "",
+    provider: defaultProvider,
     priceAmount: "",
     priceAsset: "CC",
     category: "",
@@ -402,7 +486,7 @@ function ListServiceModal({
           <Field
             label="Your Canton party ID"
             htmlFor="provider"
-            hint="From your Console Wallet — you receive payments here."
+            hint="Connect your wallet above to fill this, or paste it — you receive payments here."
           >
             <input
               id="provider"
