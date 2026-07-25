@@ -62,6 +62,8 @@ export default function Home() {
   const [agentOutput, setAgentOutput] = useState<string | null>(null);
   const [balances, setBalances] = useState<{ CC: number; cBTC: number; cETH: number } | null>(null);
   const [budgetCC, setBudgetCC] = useState("0.05");
+  const [budgetCBTC, setBudgetCBTC] = useState("0.005");
+  const [budgetCETH, setBudgetCETH] = useState("0.05");
   const [settingBudget, setSettingBudget] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -124,7 +126,7 @@ export default function Home() {
       await fetch(`${GATEWAY}/set-budget`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ budgetCC }),
+        body: JSON.stringify({ budgetCC, budgetCBTC, budgetCETH }),
       });
       load();
     } catch {
@@ -132,7 +134,7 @@ export default function Home() {
     } finally {
       setSettingBudget(false);
     }
-  }, [budgetCC, load]);
+  }, [budgetCC, budgetCBTC, budgetCETH, load]);
 
   // Trigger a full agent run on the backend (the "click and watch" test path).
   const runAgent = useCallback(async () => {
@@ -224,8 +226,8 @@ export default function Home() {
           </section>
 
           {balances && (
-            <section aria-label="Agent wallet balances" className="mt-4">
-              <div className="rounded-lg border border-line bg-panel px-4 py-3">
+            <section aria-label="Agent wallet" className="mt-4">
+              <div className="flex flex-col gap-3 rounded-lg border border-line bg-panel px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
                 <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
                   <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
                     Agent wallet
@@ -233,25 +235,19 @@ export default function Home() {
                   <BalanceItem label="CC" value={balances.CC.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
                   <BalanceItem label="cBTC" value={balances.cBTC.toFixed(4)} />
                   <BalanceItem label="cETH" value={balances.cETH.toFixed(3)} />
-                  <div className="ml-auto flex items-center gap-2">
-                    <label htmlFor="budget-cc" className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
-                      CC limit
-                    </label>
-                    <input
-                      id="budget-cc"
-                      value={budgetCC}
-                      onChange={(e) => setBudgetCC(e.target.value)}
-                      inputMode="decimal"
-                      className="h-8 w-20 rounded-md border border-line bg-panel2 px-2 font-mono text-xs tabular-nums text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    />
-                    <button
-                      onClick={setLimit}
-                      disabled={settingBudget}
-                      className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      {settingBudget ? "Setting…" : "Set / refill limit"}
-                    </button>
-                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">Limits</span>
+                  <LimitInput label="CC" value={budgetCC} onChange={setBudgetCC} />
+                  <LimitInput label="cBTC" value={budgetCBTC} onChange={setBudgetCBTC} />
+                  <LimitInput label="cETH" value={budgetCETH} onChange={setBudgetCETH} />
+                  <button
+                    onClick={setLimit}
+                    disabled={settingBudget}
+                    className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                  >
+                    {settingBudget ? "Setting…" : "Set / refill"}
+                  </button>
                 </div>
               </div>
             </section>
@@ -447,6 +443,21 @@ function BalanceItem({ label, value }: { label: string; value: string }) {
   );
 }
 
+function LimitInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <input
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        inputMode="decimal"
+        aria-label={`${label} limit`}
+        className="h-8 w-16 rounded-md border border-line bg-panel2 px-2 font-mono text-xs tabular-nums text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      />
+      <span className="font-mono text-[11px] text-accent">{label}</span>
+    </span>
+  );
+}
+
 function ListingCard({ listing }: { listing: Listing }) {
   return (
     <article className="flex flex-col gap-3 rounded-lg border border-line bg-panel p-5">
@@ -557,7 +568,7 @@ function ListServiceModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
     setForm((f) => ({ ...f, [k]: e.target.value }));
 
   const submit = async (e: React.FormEvent) => {
@@ -667,6 +678,17 @@ function ListServiceModal({
               onChange={set("category")}
               placeholder="analytics"
               className={inputCls}
+            />
+          </Field>
+
+          <Field label="Description" htmlFor="description" hint="What does this service do? Shown on the listing card and read by agents.">
+            <textarea
+              id="description"
+              value={form.description}
+              onChange={set("description")}
+              placeholder="Live weather for any city, refreshed hourly."
+              rows={2}
+              className={`${inputCls} h-auto resize-none py-2`}
             />
           </Field>
 
