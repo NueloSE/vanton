@@ -73,13 +73,18 @@ async function currentMandate(
     verbose: false,
   });
   const acs = (await acsRes.json()) as any[];
+  // An agent may have several AgentMandate contracts (re-runs, prior periods).
+  // Use the one with the most budget left — the usable one.
+  let best: { cid: string; budgetRemaining: string; n: number } | null = null;
   for (const c of acs) {
     const ce = c?.contractEntry?.JsActiveContract?.createdEvent;
     if (ce?.templateId?.endsWith(":AgentMandate")) {
-      return { cid: ce.contractId, budgetRemaining: ce.createArgument?.budgetRemaining ?? "?" };
+      const remaining = ce.createArgument?.budgetRemaining ?? "0";
+      const n = Number(remaining);
+      if (!best || n > best.n) best = { cid: ce.contractId, budgetRemaining: remaining, n };
     }
   }
-  return null;
+  return best ? { cid: best.cid, budgetRemaining: best.budgetRemaining } : null;
 }
 
 /**
