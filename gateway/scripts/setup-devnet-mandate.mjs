@@ -76,6 +76,19 @@ const ASSETS = [
   { asset: "cETH", budget: process.env.BUDGET_CETH ?? "0.05", perCall: process.env.PER_CALL_CETH ?? "0.02" },
 ];
 
+// Revoke any existing mandates first, so setting a limit REPLACES the budget
+// (exactly what you set is available) instead of stacking on top of leftovers.
+let stale;
+let revoked = 0;
+while ((stale = await activeCid(P("agent"), ":AgentMandate"))) {
+  await submit(P("owner"), {
+    ExerciseCommand: { templateId: `${PKG}:Vanton.Marketplace:AgentMandate`, contractId: stale, choice: "Mandate_Revoke", choiceArgument: {} },
+  });
+  revoked++;
+  if (revoked > 30) break; // safety
+}
+if (revoked) console.error(`  (revoked ${revoked} old mandate(s))`);
+
 for (const { asset, budget, perCall } of ASSETS) {
   await submit(P("owner"), {
     CreateCommand: {
