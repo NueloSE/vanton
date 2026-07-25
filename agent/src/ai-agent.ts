@@ -19,7 +19,6 @@ import OpenAI from "openai";
 import { getBalance, getPartyId, payDirect } from "./canton.js";
 
 const GATEWAY = (process.env.GATEWAY_URL ?? "http://localhost:3402").replace(/\/$/, "");
-const BUDGET_CC = Number(process.env.BUDGET_CC ?? 0.05);
 const MODEL = process.env.OPENAI_MODEL ?? "gpt-4o-mini";
 
 const openai = new OpenAI(); // reads OPENAI_API_KEY
@@ -51,22 +50,30 @@ async function fetchListings(): Promise<Listing[]> {
   return (await r.json()).listings ?? [];
 }
 
-/** Pay for a service through the gateway's 402 flow. Returns the service data. */
+/**
+ * Buy a service through the gateway's 402 flow. The spend limit is enforced by
+ * the Canton ledger (the AgentMandate): if the agent is over budget, the initial
+ * request comes back 403 and no payment is attempted — the ledger said no.
+ */
 async function buyService(listing: Listing): Promise<{ ok: boolean; data?: string; error?: string }> {
-  const price = Number(listing.priceAmount);
-  if (spent + price > BUDGET_CC + 1e-9) {
-    return { ok: false, error: `refused: would exceed budget (spent ${spent.toFixed(3)} + ${price} > ${BUDGET_CC} CC)` };
-  }
   const url = `${GATEWAY}${listing.endpoint}`;
   const challengeRes = await fetch(url);
-  if (challengeRes.status !== 402) {
-    return { ok: false, error: `expected 402, got ${challengeRes.status}` };
+
+  if (challengeRes.status === 403) {
+    const d = (await challengeRes.json().catch(() => ({}))) as { reason?: string; budgetRemaining?: string };
+    log(c.amber(`      ⛔ ledger refused the spend: ${d.reason} (on-chain budget left ${d.budgetRemaining ?? "0"})`));
+    return {
+      ok: false,
+      error: `The Canton ledger REFUSED this purchase (${d.reason ?? "not authorized"}). The on-chain spending budget is exhausted; you cannot buy anything more.`,
+    };
   }
+  if (challengeRes.status !== 402) return { ok: false, error: `expected 402, got ${challengeRes.status}` };
+
   const ch = (await challengeRes.json()) as { price: string; payTo: string; reference: string };
   log(c.dim(`      402 → pay ${ch.price} CC to ${ch.payTo.slice(0, 16)}…`));
   await payDirect(ch.payTo, ch.price, ch.reference);
-  spent += price;
-  log(c.teal(`      ✓ paid ${ch.price} CC on-ledger  ·  budget left ${(BUDGET_CC - spent).toFixed(3)} CC`));
+  spent += Number(listing.priceAmount);
+  log(c.teal(`      ✓ paid ${ch.price} CC on-ledger  ·  spent ${spent.toFixed(3)} CC`));
   const dataRes = await fetch(url, { headers: { "x-vanton-payment": ch.reference } });
   if (!dataRes.ok) return { ok: false, error: `retry failed ${dataRes.status}` };
   return { ok: true, data: await dataRes.text() };
@@ -79,7 +86,7 @@ async function main() {
   const listings = await fetchListings();
 
   log(c.bold("\n  VANTON AI AGENT"));
-  log(c.dim(`  party ${party.slice(0, 20)}…  ·  wallet ${bal.unlocked} CC  ·  budget ${BUDGET_CC} CC  ·  model ${MODEL}`));
+  log(c.dim(`  party ${party.slice(0, 20)}…  ·  wallet ${bal.unlocked} CC  ·  spend limit enforced on-ledger  ·  model ${MODEL}`));
   log(c.bold(`\n  TASK: `) + task);
   log(c.dim(`\n  ${listings.length} services on the marketplace:`));
   for (const l of listings) log(c.dim(`    · ${l.name} (${l.id}) — ${l.priceAmount} ${l.priceAsset}: ${l.description}`));
@@ -111,9 +118,10 @@ async function main() {
     {
       role: "system",
       content:
-        `You are an autonomous agent on the Vanton marketplace with a budget of ${BUDGET_CC} Canton Coin. ` +
-        `You complete tasks by buying paid services when they help. Each purchase spends real money on-ledger, ` +
-        `so buy only what you need and never exceed your budget. When you have enough information, give a concise final answer. ` +
+        `You are an autonomous agent on the Vanton marketplace. You have an on-chain spending budget enforced by the Canton ledger — ` +
+        `if you try to spend past it, a purchase will be REFUSED by the ledger and you must stop buying and report what you managed to gather. ` +
+        `You complete tasks by buying paid services when they help. Each purchase spends real money on-ledger, so buy only what you need. ` +
+        `When you have enough information (or the ledger stops you), give a concise final answer. ` +
         `Available services:\n` +
         listings.map((l) => `- ${l.id}: ${l.name} (${l.priceAmount} ${l.priceAsset}) — ${l.description}`).join("\n"),
     },
