@@ -19,6 +19,7 @@ import express from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 import { cantonStats } from "./canton-data.js";
+import { getAccessToken } from "./auth.js";
 
 const PORT = Number(process.env.PORT ?? 3402);
 const PAY_MODE = process.env.PAY_MODE ?? "devnet";
@@ -117,6 +118,8 @@ const mandateCfg: MandateCheckConfig | null = mandateEnabled
       operatorParty: requireEnv("VANTON_OPERATOR_PARTY"),
       agentParty: requireEnv("VANTON_AGENT_PARTY"),
       packageId: process.env.VANTON_PACKAGE_ID!,
+      // Shared devnet node needs auth; a local sandbox does not.
+      getToken: process.env.MANDATE_AUTH === "true" ? getAccessToken : undefined,
     }
   : null;
 

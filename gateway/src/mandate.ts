@@ -18,6 +18,7 @@ export interface MandateCheckConfig {
   operatorParty: string;
   agentParty: string;
   packageId: string;
+  getToken?: () => Promise<string>; // set for the shared devnet node; omit for a local sandbox
 }
 
 export interface AuthorizeResult {
@@ -28,10 +29,28 @@ export interface AuthorizeResult {
 
 const MODULE = "Vanton.Marketplace";
 
+async function headers(cfg: MandateCheckConfig): Promise<Record<string, string>> {
+  const h: Record<string, string> = { "content-type": "application/json" };
+  if (cfg.getToken) h.authorization = `Bearer ${await cfg.getToken()}`;
+  return h;
+}
+
+/** The ledger checks command rights for the token's user, so the command's
+ *  userId must be that user. Local sandbox (no token) accepts any userId. */
+async function commandUserId(cfg: MandateCheckConfig): Promise<string> {
+  if (!cfg.getToken) return "vanton";
+  try {
+    const payload = (await cfg.getToken()).split(".")[1];
+    return JSON.parse(Buffer.from(payload, "base64").toString()).sub as string;
+  } catch {
+    return "vanton";
+  }
+}
+
 async function post(cfg: MandateCheckConfig, path: string, body: unknown): Promise<Response> {
   return fetch(`${cfg.ledgerApiUrl}${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: await headers(cfg),
     body: JSON.stringify(body),
   });
 }
@@ -40,7 +59,7 @@ async function post(cfg: MandateCheckConfig, path: string, body: unknown): Promi
 async function currentMandate(
   cfg: MandateCheckConfig,
 ): Promise<{ cid: string; budgetRemaining: string } | null> {
-  const endRes = await fetch(`${cfg.ledgerApiUrl}/v2/state/ledger-end`);
+  const endRes = await fetch(`${cfg.ledgerApiUrl}/v2/state/ledger-end`, { headers: await headers(cfg) });
   const { offset } = (await endRes.json()) as { offset: number };
   const acsRes = await post(cfg, "/v2/state/active-contracts", {
     activeAtOffset: offset,
@@ -78,7 +97,7 @@ export async function authorizeSpend(
 
   const res = await post(cfg, "/v2/commands/submit-and-wait-for-transaction", {
     commands: {
-      userId: "vanton",
+      userId: await commandUserId(cfg),
       commands: [
         {
           ExerciseCommand: {
