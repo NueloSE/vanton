@@ -218,6 +218,24 @@ app.get("/svc/:id", async (req, res) => {
   }
 });
 
+// Set / refill the agent's on-ledger spending limits (creates fresh per-asset
+// mandates). Powers the UI "Set budget" control so limits are set without a terminal.
+app.post("/set-budget", (req, res) => {
+  const { budgetCC, budgetCBTC, budgetCETH } = req.body ?? {};
+  const env = { ...process.env };
+  if (budgetCC) env.BUDGET_CC = String(budgetCC);
+  if (budgetCBTC) env.BUDGET_CBTC = String(budgetCBTC);
+  if (budgetCETH) env.BUDGET_CETH = String(budgetCETH);
+  const proc = spawn("node", ["scripts/setup-devnet-mandate.mjs"], { cwd: process.cwd(), env });
+  let out = "";
+  const cap = (d: Buffer) => { out += d.toString(); };
+  proc.stdout.on("data", cap);
+  proc.stderr.on("data", cap);
+  const timer = setTimeout(() => proc.kill(), 90_000);
+  proc.on("error", (e) => { clearTimeout(timer); if (!res.headersSent) res.status(500).json({ ok: false, error: e.message }); });
+  proc.on("close", (code) => { clearTimeout(timer); if (!res.headersSent) res.json({ ok: code === 0, output: stripAnsi(out).trim() }); });
+});
+
 // The agent's spendable balances: CC from the operator wallet, cBTC/cETH from
 // the agent's own wallet (Concept B). Powers the dashboard balance tiles.
 app.get("/balances", async (_req, res) => {
@@ -236,8 +254,9 @@ app.get("/balances", async (_req, res) => {
 
 app.get("/activity", (_req, res) => {
   // Merge CC settlements + wrapped-asset settlements, newest first.
+  const agentParty = process.env.VANTON_AGENT_PARTY ?? "vanton-agent";
   const cc = activityFeed().map((s) => ({ ...s, asset: "CC" }));
-  const tok = tokenActivity().map((s) => ({ reference: s.reference, price: s.price, service: s.service, settledAt: s.settledAt, eventId: "token-transfer", sender: "agent", asset: s.asset }));
+  const tok = tokenActivity().map((s) => ({ reference: s.reference, price: s.price, service: s.service, settledAt: s.settledAt, eventId: "", sender: agentParty, asset: s.asset }));
   const activity = [...cc, ...tok].sort((a, b) => (a.settledAt < b.settledAt ? 1 : -1));
   res.json({ activity });
 });

@@ -56,10 +56,12 @@ export default function Home() {
   const [walletParty, setWalletParty] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
-  const [agentTask, setAgentTask] = useState("Get me the current BTC price, then a premium ETH momentum signal.");
+  const [agentTask, setAgentTask] = useState("");
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentOutput, setAgentOutput] = useState<string | null>(null);
   const [balances, setBalances] = useState<{ CC: number; cBTC: number; cETH: number } | null>(null);
+  const [budgetCC, setBudgetCC] = useState("0.05");
+  const [settingBudget, setSettingBudget] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -114,6 +116,23 @@ export default function Home() {
     setWalletParty(null);
   }, []);
 
+  // Set / refill the agent's on-ledger spending limit (creates fresh mandates).
+  const setLimit = useCallback(async () => {
+    setSettingBudget(true);
+    try {
+      await fetch(`${GATEWAY}/set-budget`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ budgetCC }),
+      });
+      load();
+    } catch {
+      /* ignore */
+    } finally {
+      setSettingBudget(false);
+    }
+  }, [budgetCC, load]);
+
   // Trigger a full agent run on the backend (the "click and watch" test path).
   const runAgent = useCallback(async () => {
     setAgentRunning(true);
@@ -122,7 +141,9 @@ export default function Home() {
       const r = await fetch(`${GATEWAY}/run-agent`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ task: agentTask }),
+        body: JSON.stringify({
+          task: agentTask || "Get me the current BTC price, then a premium ETH momentum signal.",
+        }),
       });
       const d = await r.json();
       setAgentOutput(d.output || "(no output)");
@@ -208,6 +229,25 @@ export default function Home() {
                   <BalanceItem label="CC" value={balances.CC.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
                   <BalanceItem label="cBTC" value={balances.cBTC.toFixed(4)} />
                   <BalanceItem label="cETH" value={balances.cETH.toFixed(3)} />
+                  <div className="ml-auto flex items-center gap-2">
+                    <label htmlFor="budget-cc" className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+                      CC limit
+                    </label>
+                    <input
+                      id="budget-cc"
+                      value={budgetCC}
+                      onChange={(e) => setBudgetCC(e.target.value)}
+                      inputMode="decimal"
+                      className="h-8 w-20 rounded-md border border-line bg-panel2 px-2 font-mono text-xs tabular-nums text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    />
+                    <button
+                      onClick={setLimit}
+                      disabled={settingBudget}
+                      className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    >
+                      {settingBudget ? "Setting…" : "Set / refill limit"}
+                    </button>
+                  </div>
                 </div>
               </div>
             </section>
@@ -232,7 +272,7 @@ export default function Home() {
                   value={agentTask}
                   onChange={(e) => setAgentTask(e.target.value)}
                   className={`${inputCls} flex-1`}
-                  placeholder="Get me the current BTC price…"
+                  placeholder="e.g. Get me the current BTC price, then a premium ETH signal."
                 />
                 <button
                   onClick={runAgent}
@@ -457,8 +497,8 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
               <td className="px-4 py-3 font-mono text-xs text-muted" title={r.sender}>
                 {shortParty(r.sender)}
               </td>
-              <td className="px-4 py-3 font-mono text-xs text-muted" title={r.eventId}>
-                {shortEvent(r.eventId)}
+              <td className="px-4 py-3 font-mono text-xs text-muted" title={r.eventId || "settled on-ledger"}>
+                {r.eventId ? shortEvent(r.eventId) : "settled ✓"}
               </td>
             </tr>
           ))}
