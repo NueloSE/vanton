@@ -67,8 +67,8 @@ Test assets: cBTC faucet (`cbtc-faucet.bitsafe.finance`), cETH devnet form (see 
 | Ledger-enforced spend cap (the "money shot") | ✅ **live** — agent cut off by the ledger at its budget |
 | canton-stats real data | ✅ live network round + ledger offset |
 | Marketplace UI (listings, live feed, list-a-service, connect wallet) | ✅ working |
-| Privacy (outsider sees nothing) | ✅ asserted in `daml test` |
-| cBTC/cETH settlement | Designed (same CIP-56 path); CC proven |
+| Privacy (outsider sees nothing) | ✅ verified on the shared node (`vanton-outsider` sees 0) |
+| **cBTC + cETH settlement** | ✅ **working** — agents pay per call in cBTC/cETH (two-party token transfers, gateway-verified) |
 
 ## Run
 
