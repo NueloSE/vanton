@@ -18,7 +18,7 @@ const TOKEN_ADMIN: Record<string, string> = {
   cETH: "rails-cethMain-1-dev::12200b6de051e66bacd250de4bc76292e9d0ef71b478d7c11e49799b8e26f853493e",
 };
 
-async function providerBalance(asset: string, provider: string): Promise<number> {
+export async function assetBalance(asset: string, provider: string): Promise<number> {
   const admin = TOKEN_ADMIN[asset];
   const token = await getAccessToken();
   const h = { authorization: `Bearer ${token}`, "content-type": "application/json" };
@@ -53,7 +53,7 @@ const pending = new Map<string, TokenCharge>();
 const settled: SettledToken[] = [];
 
 export async function issueTokenCharge(service: string, asset: string, price: string, provider: string): Promise<TokenCharge> {
-  const snapshot = await providerBalance(asset, provider);
+  const snapshot = await assetBalance(asset, provider);
   const charge: TokenCharge = {
     reference: `vanton:${service}:${crypto.randomUUID().slice(0, 13)}`,
     service, asset, price, provider, snapshot, issuedAt: Date.now(),
@@ -65,7 +65,7 @@ export async function issueTokenCharge(service: string, asset: string, price: st
 export async function verifyTokenCharge(reference: string): Promise<SettledToken | null> {
   const c = pending.get(reference);
   if (!c) return null;
-  const bal = await providerBalance(c.asset, c.provider);
+  const bal = await assetBalance(c.asset, c.provider);
   if (bal + 1e-9 >= c.snapshot + Number(c.price)) {
     pending.delete(reference);
     const rec: SettledToken = { ...c, settledAt: new Date().toISOString() };

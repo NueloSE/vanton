@@ -45,7 +45,7 @@ const c = {
 };
 const log = (s = "") => console.log(s);
 
-let spent = 0;
+const spent: Record<string, number> = {}; // per-asset total actually settled
 
 async function fetchListings(): Promise<Listing[]> {
   const r = await fetch(`${GATEWAY}/listings`);
@@ -84,6 +84,8 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
     await payDirect(ch.payTo, ch.price, ch.reference); // CC via validator API
     log(c.teal(`      ✓ paid ${ch.price} CC on-ledger`));
   }
+
+  spent[ch.asset] = (spent[ch.asset] ?? 0) + Number(ch.price);
 
   // The gateway verifies by the charge reference (for both rails).
   const dataRes = await fetch(url, { headers: { "x-vanton-payment": ch.reference } });
@@ -165,7 +167,8 @@ async function main() {
     }
 
     log(c.bold("\n  ANSWER: ") + (msg.content ?? "(no answer)"));
-    log(c.dim(`\n  total spent: ${spent.toFixed(3)} CC on-ledger\n`));
+    const summary = Object.entries(spent).map(([a, n]) => `${n.toFixed(a === "cBTC" ? 4 : 3)} ${a}`).join(" · ") || "nothing";
+    log(c.dim(`\n  total spent on-ledger: ${summary}\n`));
     return;
   }
   log(c.dim("  (stopped after 8 steps)"));

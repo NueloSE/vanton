@@ -21,7 +21,8 @@ import express, { type Response } from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 import { issueTokenCharge, verifyTokenCharge, tokenActivity } from "./token-verify.js";
-import { cantonStats } from "./canton-data.js";
+import { cantonStats, ccBalance } from "./canton-data.js";
+import { assetBalance } from "./token-verify.js";
 import { btcPrice, ethSignal } from "./prices.js";
 import { loadUserListings, saveUserListings } from "./listings-store.js";
 import { getAccessToken } from "./auth.js";
@@ -214,6 +215,22 @@ app.get("/svc/:id", async (req, res) => {
     res.status(upstream.status).type(upstream.headers.get("content-type") ?? "application/json").send(body);
   } catch (e) {
     res.status(502).json({ error: "provider API unreachable", detail: (e as Error).message });
+  }
+});
+
+// The agent's spendable balances: CC from the operator wallet, cBTC/cETH from
+// the agent's own wallet (Concept B). Powers the dashboard balance tiles.
+app.get("/balances", async (_req, res) => {
+  const agent = process.env.VANTON_AGENT_PARTY ?? MERCHANT_PARTY;
+  try {
+    const [cc, cbtc, ceth] = await Promise.all([
+      ccBalance(),
+      assetBalance("cBTC", agent),
+      assetBalance("cETH", agent),
+    ]);
+    res.json({ CC: cc, cBTC: cbtc, cETH: ceth });
+  } catch (e) {
+    res.status(502).json({ error: (e as Error).message });
   }
 });
 

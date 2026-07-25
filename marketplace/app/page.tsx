@@ -59,16 +59,19 @@ export default function Home() {
   const [agentTask, setAgentTask] = useState("Get me the current BTC price, then a premium ETH momentum signal.");
   const [agentRunning, setAgentRunning] = useState(false);
   const [agentOutput, setAgentOutput] = useState<string | null>(null);
+  const [balances, setBalances] = useState<{ CC: number; cBTC: number; cETH: number } | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [l, a] = await Promise.all([
+      const [l, a, b] = await Promise.all([
         fetch(`${GATEWAY}/listings`).then((r) => r.json()),
         fetch(`${GATEWAY}/activity`).then((r) => r.json()),
+        fetch(`${GATEWAY}/balances`).then((r) => r.json()).catch(() => null),
       ]);
       setListings(l.listings ?? []);
       setActivity(a.activity ?? []);
+      setBalances(b && !b.error ? b : null);
       setLastFetch(new Date());
       setPhase("ready");
     } catch {
@@ -194,6 +197,21 @@ export default function Home() {
               value={stats.latest ? timeAgo(stats.latest) : "—"}
             />
           </section>
+
+          {balances && (
+            <section aria-label="Agent wallet balances" className="mt-4">
+              <div className="rounded-lg border border-line bg-panel px-4 py-3">
+                <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
+                  <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                    Agent wallet
+                  </span>
+                  <BalanceItem label="CC" value={balances.CC.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
+                  <BalanceItem label="cBTC" value={balances.cBTC.toFixed(4)} />
+                  <BalanceItem label="cETH" value={balances.cETH.toFixed(3)} />
+                </div>
+              </div>
+            </section>
+          )}
 
           <section aria-label="Run the AI agent" className="mt-8">
             <div className="rounded-lg border border-line bg-panel p-5">
@@ -373,6 +391,15 @@ function Stat({
         {value}
       </p>
     </div>
+  );
+}
+
+function BalanceItem({ label, value }: { label: string; value: string }) {
+  return (
+    <span className="inline-flex items-baseline gap-1.5">
+      <span className="font-mono text-lg font-semibold tabular-nums text-text">{value}</span>
+      <span className="font-mono text-xs text-accent">{label}</span>
+    </span>
   );
 }
 

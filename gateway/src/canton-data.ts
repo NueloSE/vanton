@@ -19,6 +19,17 @@ export interface CantonStats {
   source: string;
 }
 
+/** CC (Amulet) balance of the onboarded operator wallet, via the validator API. */
+export async function ccBalance(): Promise<number> {
+  const token = await getAccessToken();
+  const r = await fetch(`${VALIDATOR}/api/validator/v0/wallet/balance`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!r.ok) return 0;
+  const d = (await r.json()) as { effective_unlocked_qty?: string };
+  return Number(d.effective_unlocked_qty ?? 0);
+}
+
 export async function cantonStats(): Promise<CantonStats> {
   const token = await getAccessToken();
   const auth = { authorization: `Bearer ${token}` };
