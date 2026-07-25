@@ -1,16 +1,17 @@
 "use client";
 
 /**
- * Vanton marketplace — one screen, two jobs:
- *   1. Browse the services agents can buy (from the gateway /listings).
- *   2. Watch real payments settle on Canton, live (from /activity, polled).
+ * Vanton marketplace — one screen, three jobs:
+ *   1. Browse the services agents can buy (gateway /listings).
+ *   2. Let a provider list a new service (gateway POST /listings).
+ *   3. Watch real payments settle on Canton, live (gateway /activity, polled).
  *
- * Everything shown is read from the gateway, which reads the ledger — no
- * fabricated numbers anywhere.
+ * Every number shown is read from the gateway, which reads the ledger — no
+ * fabricated data.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, RefreshCw, Server, Wallet, Zap } from "lucide-react";
+import { Activity, Plus, RefreshCw, Server, Wallet, X, Zap } from "lucide-react";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3402";
 const POLL_MS = 5000;
@@ -51,6 +52,7 @@ export default function Home() {
   const [listings, setListings] = useState<Listing[]>([]);
   const [activity, setActivity] = useState<Settled[]>([]);
   const [lastFetch, setLastFetch] = useState<Date | null>(null);
+  const [showList, setShowList] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
@@ -64,7 +66,7 @@ export default function Home() {
       setLastFetch(new Date());
       setPhase("ready");
     } catch {
-      setPhase((p) => (p === "ready" ? p : "error")); // keep data if we had it
+      setPhase((p) => (p === "ready" ? p : "error"));
     }
   }, []);
 
@@ -97,7 +99,8 @@ export default function Home() {
           <p className="text-sm font-medium text-bad">Can&apos;t reach the Vanton gateway</p>
           <p className="text-sm text-muted">
             The gateway at <span className="font-mono">{GATEWAY}</span> isn&apos;t responding. Start
-            it with <span className="font-mono">npm run dev</span> in <span className="font-mono">gateway/</span>, then retry.
+            it with <span className="font-mono">npm run dev</span> in{" "}
+            <span className="font-mono">gateway/</span>, then retry.
           </p>
           <button
             onClick={load}
@@ -123,7 +126,16 @@ export default function Home() {
           </section>
 
           <section aria-label="Service listings" className="mt-10">
-            <SectionTitle>Services</SectionTitle>
+            <div className="flex items-center justify-between gap-4">
+              <SectionTitle>Services</SectionTitle>
+              <button
+                onClick={() => setShowList(true)}
+                className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-onaccent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+              >
+                <Plus className="h-4 w-4" aria-hidden />
+                List a service
+              </button>
+            </div>
             <div className="mt-4 grid gap-3 md:grid-cols-2">
               {listings.map((l) => (
                 <ListingCard key={l.id} listing={l} />
@@ -142,6 +154,17 @@ export default function Home() {
           </section>
         </>
       )}
+
+      {showList && (
+        <ListServiceModal
+          gateway={GATEWAY}
+          onClose={() => setShowList(false)}
+          onListed={() => {
+            setShowList(false);
+            load();
+          }}
+        />
+      )}
     </main>
   );
 }
@@ -151,7 +174,7 @@ function Header({ live, lastFetch }: { live: boolean; lastFetch: Date | null }) 
     <header className="flex flex-wrap items-center justify-between gap-4">
       <div className="flex flex-col gap-2">
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.png" alt="Vanton" className="h-11 w-auto" />
+        <img src="/logo.png" alt="Vanton" className="h-12 w-auto md:h-14" />
         <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">
           Agent payments on Canton
         </p>
@@ -163,7 +186,9 @@ function Header({ live, lastFetch }: { live: boolean; lastFetch: Date | null }) 
           aria-hidden
         />
         <span className="font-mono text-xs text-muted">
-          {live ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}` : "connecting…"}
+          {live
+            ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}`
+            : "connecting…"}
         </span>
       </div>
     </header>
@@ -206,7 +231,7 @@ function ListingCard({ listing }: { listing: Listing }) {
       <div className="flex items-start justify-between gap-3">
         <div>
           <h3 className="font-semibold">{listing.name}</h3>
-          <p className="mt-1 text-sm text-muted">{listing.description}</p>
+          <p className="mt-1 text-sm text-muted">{listing.description || "—"}</p>
         </div>
         <span className="shrink-0 rounded-full border border-line bg-panel2 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
           {listing.category}
@@ -228,7 +253,7 @@ function ListingCard({ listing }: { listing: Listing }) {
 function ActivityTable({ rows }: { rows: Settled[] }) {
   return (
     <div className="overflow-x-auto rounded-lg border border-line">
-      <table className="w-full min-w-[640px] border-collapse text-sm">
+      <table className="w-full min-w-160 border-collapse text-sm">
         <thead>
           <tr className="border-b border-line bg-panel2 text-left">
             {["Settled", "Service", "Amount", "Payer", "On-ledger event"].map((h) => (
@@ -249,8 +274,7 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
               </td>
               <td className="px-4 py-3 font-medium">{r.service}</td>
               <td className="px-4 py-3 font-mono tabular-nums">
-                <span className="text-good">{r.price}</span>{" "}
-                <span className="text-muted">CC</span>
+                <span className="text-good">{r.price}</span> <span className="text-muted">CC</span>
               </td>
               <td className="px-4 py-3 font-mono text-xs text-muted" title={r.sender}>
                 {shortParty(r.sender)}
@@ -274,9 +298,204 @@ function EmptyActivity() {
         <p className="text-sm font-medium">No settlements yet</p>
         <p className="mt-1 text-sm text-muted">
           Run the demo agent to watch payments land here:{" "}
-          <span className="font-mono text-xs">cd agent && npm start</span>
+          <span className="font-mono text-xs">cd agent &amp;&amp; npm start</span>
         </p>
       </div>
+    </div>
+  );
+}
+
+function ListServiceModal({
+  gateway,
+  onClose,
+  onListed,
+}: {
+  gateway: string;
+  onClose: () => void;
+  onListed: () => void;
+}) {
+  const [form, setForm] = useState({
+    name: "",
+    provider: "",
+    priceAmount: "",
+    priceAsset: "CC",
+    category: "",
+    endpoint: "",
+    description: "",
+  });
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  // Close on Escape.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) =>
+    setForm((f) => ({ ...f, [k]: e.target.value }));
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(`${gateway}/listings`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `Request failed (${res.status})`);
+      }
+      onListed();
+    } catch (err) {
+      setError((err as Error).message);
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="list-title"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-lg border border-line bg-panel p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-start justify-between">
+          <div>
+            <h2 id="list-title" className="text-lg font-bold tracking-tight">
+              List a service
+            </h2>
+            <p className="mt-1 text-sm text-muted">
+              Register an API agents can pay for, per call, on Canton.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-md p-2 text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          >
+            <X className="h-5 w-5" aria-hidden />
+          </button>
+        </div>
+
+        <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
+          <Field label="Service name" htmlFor="name">
+            <input
+              id="name"
+              required
+              value={form.name}
+              onChange={set("name")}
+              placeholder="Canton Stats API"
+              className={inputCls}
+            />
+          </Field>
+
+          <Field
+            label="Your Canton party ID"
+            htmlFor="provider"
+            hint="From your Console Wallet — you receive payments here."
+          >
+            <input
+              id="provider"
+              required
+              value={form.provider}
+              onChange={set("provider")}
+              placeholder="yourname::1220…"
+              autoComplete="off"
+              className={`${inputCls} font-mono text-xs`}
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Price / call" htmlFor="price">
+              <input
+                id="price"
+                required
+                inputMode="decimal"
+                value={form.priceAmount}
+                onChange={set("priceAmount")}
+                placeholder="0.01"
+                className={`${inputCls} font-mono tabular-nums`}
+              />
+            </Field>
+            <Field label="Asset" htmlFor="asset">
+              <select id="asset" value={form.priceAsset} onChange={set("priceAsset")} className={inputCls}>
+                <option value="CC">CC</option>
+                <option value="cBTC">cBTC</option>
+                <option value="cETH">cETH</option>
+              </select>
+            </Field>
+          </div>
+
+          <Field label="Category" htmlFor="category">
+            <input
+              id="category"
+              value={form.category}
+              onChange={set("category")}
+              placeholder="analytics"
+              className={inputCls}
+            />
+          </Field>
+
+          <Field label="Endpoint URL" htmlFor="endpoint" hint="Where the gateway meters calls.">
+            <input
+              id="endpoint"
+              value={form.endpoint}
+              onChange={set("endpoint")}
+              placeholder="https://api.example.com/data"
+              className={`${inputCls} font-mono text-xs`}
+            />
+          </Field>
+
+          {error && (
+            <p className="rounded-md border border-bad/30 bg-bad/5 px-3 py-2 text-sm text-bad">
+              {error}
+            </p>
+          )}
+
+          <button
+            type="submit"
+            disabled={submitting}
+            className="mt-1 inline-flex h-11 items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-onaccent disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
+          >
+            {submitting ? "Listing…" : "List service"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
+const inputCls =
+  "h-10 w-full rounded-md border border-line bg-panel2 px-3 text-sm text-text placeholder:text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
+
+function Field({
+  label,
+  htmlFor,
+  hint,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      <label htmlFor={htmlFor} className="text-sm font-medium">
+        {label}
+      </label>
+      {children}
+      {hint && <p className="text-xs text-muted">{hint}</p>}
     </div>
   );
 }

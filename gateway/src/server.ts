@@ -63,6 +63,39 @@ const listings = [
 ];
 
 app.get("/listings", (_req, res) => res.json({ listings }));
+
+// A provider lists a service. In production this is a ServiceListingProposal on
+// the ledger (signed with the provider's Console Wallet) that the operator
+// accepts; here it registers the listing the marketplace shows and the gateway
+// meters. The provider party is the payee for that service.
+app.post("/listings", (req, res) => {
+  const { name, provider, priceAmount, priceAsset, category, endpoint, description } =
+    req.body ?? {};
+  if (!name || !provider || !priceAmount) {
+    return res.status(400).json({ error: "name, provider and priceAmount are required" });
+  }
+  if (Number.isNaN(Number(priceAmount)) || Number(priceAmount) <= 0) {
+    return res.status(400).json({ error: "priceAmount must be a positive number" });
+  }
+  const id = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
+  if (listings.some((l) => l.id === id)) {
+    return res.status(409).json({ error: "a service with that name already exists" });
+  }
+  const listing = {
+    id,
+    name: String(name),
+    provider: String(provider),
+    priceAmount: String(priceAmount),
+    priceAsset: priceAsset === "cBTC" || priceAsset === "cETH" ? priceAsset : "CC",
+    category: String(category || "general"),
+    endpoint: String(endpoint || `/${id}`),
+    description: String(description || ""),
+  };
+  listings.unshift(listing);
+  console.log(`[gateway] listed "${listing.name}" @ ${listing.priceAmount} ${listing.priceAsset} by ${listing.provider.slice(0, 24)}…`);
+  res.status(201).json({ listing });
+});
+
 app.get("/activity", (_req, res) => res.json({ activity: activityFeed() }));
 app.get("/health", (_req, res) => res.json({ ok: true, payMode: PAY_MODE }));
 
