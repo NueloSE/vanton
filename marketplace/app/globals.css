@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+/* Vanton brand tokens — see brand.md at repo root (source of truth). */
+@theme {
+  --color-ink: #0a0f1c;
+  --color-panel: #121a2b;
+  --color-panel2: #0e1524;
+  --color-line: rgba(233, 237, 245, 0.13);
+  --color-text: #e9edf5;
+  --color-muted: #95a0b5;
+  --color-accent: #ffb020;
+  --color-onaccent: #1a1200;
+  --color-good: #3bc9b0;
+  --color-bad: #ff7a70;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+body {
+  background: var(--color-ink);
+  color: var(--color-text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Live-dot pulse — decorative, so disabled under reduced motion. */
+@media (prefers-reduced-motion: no-preference) {
+  .pulse-dot {
+    animation: pulse-dot 2s ease-in-out infinite;
+  }
+  @keyframes pulse-dot {
+    0%,
+    100% {
+      opacity: 1;
+    }
+    50% {
+      opacity: 0.35;
+    }
+  }
+}

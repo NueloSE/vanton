@@ -37,6 +37,14 @@ const MERCHANT_PARTY = requireEnv("CANTON_X402_PAYTO");
 const app = express();
 app.use(express.json());
 
+// The marketplace UI (localhost:3400) reads /listings and /activity cross-origin.
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, x-vanton-mandate, x-vanton-payment");
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
 // ---------------------------------------------------------------------------
 // Marketplace data (free endpoints; the UI reads these)
 // ---------------------------------------------------------------------------
