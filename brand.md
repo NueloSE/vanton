@@ -37,6 +37,13 @@ Institutional-confident, zero hype. Numbers over adjectives. Say "settled on-led
 "the ledger rejected it" — never "blazing fast", "revolutionary". Sentence case everywhere,
 no exclamation marks in product UI.
 
+## Logo
+
+The logo (founder's choice) is the multicolor echelon mark: orange + sky pills,
+crimson circle, royal overlap lens, on black — sources in `branding/`. It lives on
+black surfaces (project page, socials, video title card). The product UI keeps the
+dark/amber palette above; the logo's colors are not UI tokens.
+
 ## Motif
 
 The HTTP 402 wire flow (`402 Payment Required` → pay → `200 OK`) is the brand's

@@ -1,8 +1,15 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 512" width="1400" height="512">
-  <!-- Vanton horizontal lockup: mark + wordmark. Brand: brand.md -->
-  <rect width="1400" height="512" fill="#0A0F1C"/>
-  <polygon points="100,118 174,118 256,321 338,118 412,118 292,430 220,430" fill="#E9EDF5"/>
-  <circle cx="256" cy="140" r="56" fill="#FFB020"/>
-  <text x="490" y="336" font-family="'Helvetica Neue', Helvetica, Arial, sans-serif"
-        font-size="170" font-weight="800" letter-spacing="26" fill="#E9EDF5">VANTON</text>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 550" width="1400" height="550">
+  <!-- Vanton lockup: mark + overlapping wordmark, per approved reference -->
+  <defs>
+    <clipPath id="skyclipL">
+      <rect x="209" y="185" width="310" height="120" rx="60" transform="rotate(-45 364 245)"/>
+    </clipPath>
+  </defs>
+  <rect width="1400" height="550" fill="#000000"/>
+  <rect x="20" y="225" width="310" height="120" rx="60" fill="#F5A02C" transform="rotate(-45 175 285)"/>
+  <circle cx="272" cy="196" r="115" fill="#E0475C"/>
+  <rect x="209" y="185" width="310" height="120" rx="60" fill="#74C6E8" transform="rotate(-45 364 245)"/>
+  <circle cx="272" cy="196" r="115" fill="#3B6BD6" clip-path="url(#skyclipL)"/>
+  <text x="340" y="400" font-family="'Arial Black', 'Helvetica Neue', Arial, sans-serif"
+        font-size="150" font-weight="900" letter-spacing="28" fill="#FFFFFF">VANTON</text>
 </svg>

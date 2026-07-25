@@ -1,8 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <!-- Vanton mark: the gate (V) and the coin (amber). Brand: brand.md -->
-  <rect width="512" height="512" fill="#0A0F1C"/>
-  <!-- the gate: single-stroke V, flat-cut vertex -->
-  <polygon points="100,118 174,118 256,321 338,118 412,118 292,430 220,430" fill="#E9EDF5"/>
-  <!-- the coin, passing the gate -->
-  <circle cx="256" cy="140" r="56" fill="#FFB020"/>
+  <!-- Vanton mark: echelon pills + circle with overlap lens -->
+  <defs>
+    <clipPath id="skyclip">
+      <rect x="209" y="185" width="310" height="120" rx="60" transform="rotate(-45 364 245)"/>
+    </clipPath>
+  </defs>
+  <rect width="512" height="512" fill="#000000"/>
+  <!-- orange pill (lower-left) -->
+  <rect x="20" y="225" width="310" height="120" rx="60" fill="#F5A02C" transform="rotate(-45 175 285)"/>
+  <!-- crimson circle over the orange pill's top end -->
+  <circle cx="272" cy="196" r="115" fill="#E0475C"/>
+  <!-- sky pill (echelon right, bottom end peeking below the circle) -->
+  <rect x="209" y="185" width="310" height="120" rx="60" fill="#74C6E8" transform="rotate(-45 364 245)"/>
+  <!-- royal lens: circle where it crosses the sky pill -->
+  <circle cx="272" cy="196" r="115" fill="#3B6BD6" clip-path="url(#skyclip)"/>
 </svg>
