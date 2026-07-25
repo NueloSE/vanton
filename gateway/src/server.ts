@@ -103,14 +103,20 @@ app.get("/listings", (_req, res) => res.json({ listings }));
 // the ledger (signed with the provider's Console Wallet) that the operator
 // accepts; here it registers the listing the marketplace shows and the gateway
 // meters. The provider party is the payee for that service.
+// user-listed services: id -> the provider's real API URL the gateway proxies to
+const targets = new Map<string, string>();
+
 app.post("/listings", (req, res) => {
-  const { name, provider, priceAmount, priceAsset, category, endpoint, description } =
+  const { name, provider, priceAmount, priceAsset, category, targetUrl, description } =
     req.body ?? {};
   if (!name || !provider || !priceAmount) {
     return res.status(400).json({ error: "name, provider and priceAmount are required" });
   }
   if (Number.isNaN(Number(priceAmount)) || Number(priceAmount) <= 0) {
     return res.status(400).json({ error: "priceAmount must be a positive number" });
+  }
+  if (!targetUrl || !/^https?:\/\//.test(String(targetUrl))) {
+    return res.status(400).json({ error: "targetUrl must be an http(s) URL to your API" });
   }
   const id = String(name).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40);
   if (listings.some((l) => l.id === id)) {
@@ -123,12 +129,50 @@ app.post("/listings", (req, res) => {
     priceAmount: String(priceAmount),
     priceAsset: priceAsset === "cBTC" || priceAsset === "cETH" ? priceAsset : "CC",
     category: String(category || "general"),
-    endpoint: String(endpoint || `/${id}`),
+    endpoint: `/svc/${id}`, // the gateway gates this path and proxies to targetUrl
     description: String(description || ""),
   };
+  targets.set(id, String(targetUrl));
   listings.unshift(listing);
-  console.log(`[gateway] listed "${listing.name}" @ ${listing.priceAmount} ${listing.priceAsset} by ${listing.provider.slice(0, 24)}…`);
+  console.log(`[gateway] listed "${listing.name}" @ ${listing.priceAmount} ${listing.priceAsset} by ${listing.provider.slice(0, 24)}… -> ${targetUrl}`);
   res.status(201).json({ listing });
+});
+
+// Generic gated proxy: ANY listed service is buyable. Pay in the listing's asset
+// to its provider, then the gateway proxies the call to the provider's API.
+app.get("/svc/:id", async (req, res) => {
+  const listing = listings.find((l) => l.id === req.params.id);
+  const target = targets.get(req.params.id);
+  if (!listing || !target) return res.status(404).json({ error: "no such service" });
+  const isToken = listing.priceAsset === "cBTC" || listing.priceAsset === "cETH";
+  const ref = req.header("x-vanton-payment");
+
+  if (!ref) {
+    const charge = isToken
+      ? await issueTokenCharge(listing.id, listing.priceAsset as "cBTC" | "cETH", listing.priceAmount, listing.provider)
+      : issueCharge(listing.id, listing.priceAmount);
+    return res.status(402).json({
+      price: listing.priceAmount,
+      payTo: isToken ? listing.provider : MERCHANT_PARTY,
+      asset: listing.priceAsset,
+      reference: charge.reference,
+    });
+  }
+  let paid = false;
+  for (let i = 0; i < 6 && !paid; i++) {
+    paid = Boolean(isToken ? await verifyTokenCharge(ref) : await verifyCharge(ref));
+    if (!paid) await new Promise((r) => setTimeout(r, 2000));
+  }
+  if (!paid) return res.status(402).json({ error: "payment not found on-ledger", reference: ref });
+
+  // Paid — proxy to the provider's API and return its response.
+  try {
+    const upstream = await fetch(target, { signal: AbortSignal.timeout(10_000) });
+    const body = await upstream.text();
+    res.status(upstream.status).type(upstream.headers.get("content-type") ?? "application/json").send(body);
+  } catch (e) {
+    res.status(502).json({ error: "provider API unreachable", detail: (e as Error).message });
+  }
 });
 
 app.get("/activity", (_req, res) => {
@@ -138,6 +182,12 @@ app.get("/activity", (_req, res) => {
   const activity = [...cc, ...tok].sort((a, b) => (a.settledAt < b.settledAt ? 1 : -1));
   res.json({ activity });
 });
+
+// A free sample provider API — point a test listing's "Your API URL" at this to
+// try the full list-a-service → agent-buys flow without hosting your own API.
+app.get("/free-sample", (_req, res) =>
+  res.json({ sample: "hello from a provider API", value: Math.round(Math.random() * 1000), ts: new Date().toISOString() }),
+);
 
 // Wrapped-asset paid services (cBTC / cETH). Each settles in a registry token to
 // PROVIDER_PARTY: the initial request issues a token 402; the retry verifies the

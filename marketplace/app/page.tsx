@@ -404,7 +404,7 @@ function ListServiceModal({
     priceAmount: "",
     priceAsset: "CC",
     category: "",
-    endpoint: "",
+    targetUrl: "",
     description: "",
   });
   const [submitting, setSubmitting] = useState(false);
@@ -530,12 +530,17 @@ function ListServiceModal({
             />
           </Field>
 
-          <Field label="Endpoint URL" htmlFor="endpoint" hint="Where the gateway meters calls.">
+          <Field
+            label="Your API URL"
+            htmlFor="targetUrl"
+            hint="The gateway calls this after an agent pays. Try the demo one below to test."
+          >
             <input
-              id="endpoint"
-              value={form.endpoint}
-              onChange={set("endpoint")}
-              placeholder="https://api.example.com/data"
+              id="targetUrl"
+              required
+              value={form.targetUrl}
+              onChange={set("targetUrl")}
+              placeholder="http://localhost:3402/free-sample"
               className={`${inputCls} font-mono text-xs`}
             />
           </Field>
