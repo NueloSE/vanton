@@ -101,34 +101,24 @@ app.get("/activity", (_req, res) => res.json({ activity: activityFeed() }));
 app.get("/health", (_req, res) => res.json({ ok: true, payMode: PAY_MODE }));
 
 // ---------------------------------------------------------------------------
-// GATE 1 — on-ledger mandate (activates when the DAR is deployed)
+// Mandate + payment gate for /stats
+//   initial request (no payment): the on-ledger mandate authorizes the spend
+//     (budget / per-call cap / expiry). Rejected -> 403 and the agent never
+//     pays. Authorized -> issue the 402 challenge.
+//   retry (with x-vanton-payment): verify the CC settled on devnet, then serve.
+// The mandate check runs on the ledger hosting our DAR (local Canton today; the
+// shared node once the package is installed). Enabled when VANTON_PACKAGE_ID set.
 // ---------------------------------------------------------------------------
 
 const mandateEnabled = Boolean(process.env.VANTON_PACKAGE_ID);
 const mandateCfg: MandateCheckConfig | null = mandateEnabled
   ? {
-      ledgerApiUrl: requireEnv("LEDGER_API_URL").replace(/\/$/, ""),
-      bearerToken: "", // TODO: fetch per-request via auth.ts once DAR is live
+      ledgerApiUrl: requireEnv("LOCAL_LEDGER_API_URL").replace(/\/$/, ""),
       operatorParty: requireEnv("VANTON_OPERATOR_PARTY"),
       agentParty: requireEnv("VANTON_AGENT_PARTY"),
       packageId: process.env.VANTON_PACKAGE_ID!,
     }
   : null;
-
-app.use("/stats", async (req, res, next) => {
-  if (!mandateCfg) return next(); // pre-DAR: payment gate only
-  const mandateCid = req.header("x-vanton-mandate");
-  if (!mandateCid) return res.status(400).json({ error: "missing x-vanton-mandate header" });
-  const result = await authorizeSpend(mandateCfg, mandateCid, MERCHANT_PARTY, "canton-stats", PRICE_CC);
-  if (!result.ok) {
-    return res.status(403).json({ error: "mandate denied", reason: result.reason });
-  }
-  next();
-});
-
-// ---------------------------------------------------------------------------
-// GATE 2 — payment (devnet rail)
-// ---------------------------------------------------------------------------
 
 if (PAY_MODE !== "devnet") {
   console.error("[gateway] PAY_MODE=x402 (mainnet facilitator) is the post-hackathon rail; use devnet");
@@ -137,8 +127,19 @@ if (PAY_MODE !== "devnet") {
 
 app.use("/stats", async (req, res, next) => {
   const ref = req.header("x-vanton-payment");
+
   if (!ref) {
-    // No payment yet — issue the paywall challenge.
+    // Initial request: enforce the on-ledger mandate BEFORE offering to charge.
+    if (mandateCfg) {
+      const auth = await authorizeSpend(mandateCfg, "canton-stats", PRICE_CC);
+      if (!auth.ok) {
+        console.log(`[gateway] mandate DENIED: ${auth.reason} (budget left ${auth.remaining})`);
+        return res
+          .status(403)
+          .json({ error: "mandate denied", reason: auth.reason, budgetRemaining: auth.remaining });
+      }
+      console.log(`[gateway] mandate authorized · budget left ${auth.remaining} CC`);
+    }
     const charge = issueCharge("canton-stats", PRICE_CC);
     return res.status(402).json({
       price: charge.price,
@@ -149,13 +150,13 @@ app.use("/stats", async (req, res, next) => {
         "Pay via Canton validator API transfer-preapproval/send with description=<reference>, then retry with header x-vanton-payment: <reference>",
     });
   }
-  // Payment claimed — verify it landed on-ledger. Settlement is fast but
-  // history indexing can lag a few seconds, so retry briefly.
+
+  // Retry with payment — verify it landed on-ledger (indexing can lag a few s).
   for (let attempt = 0; attempt < 5; attempt++) {
     const settledCharge = await verifyCharge(ref);
     if (settledCharge) {
       console.log(
-        `[gateway] verified ${settledCharge.price} CC for ${settledCharge.service} (${ref}) event ${settledCharge.eventId.slice(0, 18)}…`,
+        `[gateway] verified ${settledCharge.price} CC (${ref}) event ${settledCharge.eventId.slice(0, 18)}…`,
       );
       return next();
     }
