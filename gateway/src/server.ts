@@ -20,6 +20,7 @@ import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 import { issueTokenCharge, verifyTokenCharge, tokenActivity } from "./token-verify.js";
 import { cantonStats } from "./canton-data.js";
+import { btcPrice, ethSignal } from "./prices.js";
 import { getAccessToken } from "./auth.js";
 
 const PORT = Number(process.env.PORT ?? 3402);
@@ -92,9 +93,9 @@ const listings = [
 
 // Wrapped-asset services: (endpoint, asset, price, response). Both settle in a
 // registry token to PROVIDER_PARTY via the same verify path.
-const TOKEN_SERVICES: Record<string, { asset: "cBTC" | "cETH"; price: string; body: () => object }> = {
-  "/eth-signal": { asset: "cETH", price: process.env.PRICE_CETH ?? "0.01", body: () => ({ service: "eth-signal", signal: "ETH momentum: neutral→up", paidIn: "cETH" }) },
-  "/btc-price": { asset: "cBTC", price: process.env.PRICE_CBTC ?? "0.001", body: () => ({ service: "btc-price", btcUsd: 64231.5, paidIn: "cBTC" }) },
+const TOKEN_SERVICES: Record<string, { asset: "cBTC" | "cETH"; price: string; body: () => Promise<object> }> = {
+  "/eth-signal": { asset: "cETH", price: process.env.PRICE_CETH ?? "0.01", body: ethSignal },
+  "/btc-price": { asset: "cBTC", price: process.env.PRICE_CBTC ?? "0.001", body: btcPrice },
 };
 
 app.get("/listings", (_req, res) => res.json({ listings }));
@@ -211,7 +212,7 @@ for (const [path, svc] of Object.entries(TOKEN_SERVICES)) {
     }
     return res.status(402).json({ error: `${svc.asset} payment not found on-ledger`, reference: ref });
   });
-  app.get(path, (_req, res) => res.json({ ...svc.body(), generatedAt: new Date().toISOString() }));
+  app.get(path, async (_req, res) => res.json({ ...(await svc.body()), generatedAt: new Date().toISOString() }));
 }
 app.get("/health", (_req, res) => res.json({ ok: true, payMode: PAY_MODE }));
 
