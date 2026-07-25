@@ -18,6 +18,7 @@ import "dotenv/config";
 import express from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
+import { cantonStats } from "./canton-data.js";
 
 const PORT = Number(process.env.PORT ?? 3402);
 const PAY_MODE = process.env.PAY_MODE ?? "devnet";
@@ -167,13 +168,13 @@ app.use("/stats", async (req, res, next) => {
 // The paid resource
 // ---------------------------------------------------------------------------
 
-app.get("/stats", (_req, res) => {
-  res.json({
-    service: "canton-stats",
-    network: "hackcanton-01 devnet",
-    generatedAt: new Date().toISOString(),
-    paid: true,
-  });
+app.get("/stats", async (_req, res) => {
+  try {
+    const stats = await cantonStats();
+    res.json({ service: "canton-stats", paid: true, ...stats });
+  } catch (e) {
+    res.status(502).json({ error: "upstream data unavailable", detail: (e as Error).message });
+  }
 });
 
 app.listen(PORT, () => {
