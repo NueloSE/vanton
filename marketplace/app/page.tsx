@@ -56,7 +56,25 @@ export default function Home() {
   const [walletParty, setWalletParty] = useState<string | null>(null);
   const [connecting, setConnecting] = useState(false);
   const [walletError, setWalletError] = useState<string | null>(null);
+  const [agentTask, setAgentTask] = useState("Get me the current BTC price, then a premium ETH momentum signal.");
+  const [agentRunning, setAgentRunning] = useState(false);
+  const [agentOutput, setAgentOutput] = useState<string | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const [l, a] = await Promise.all([
+        fetch(`${GATEWAY}/listings`).then((r) => r.json()),
+        fetch(`${GATEWAY}/activity`).then((r) => r.json()),
+      ]);
+      setListings(l.listings ?? []);
+      setActivity(a.activity ?? []);
+      setLastFetch(new Date());
+      setPhase("ready");
+    } catch {
+      setPhase((p) => (p === "ready" ? p : "error"));
+    }
+  }, []);
 
   // Connect a Canton wallet (Console Wallet et al.) via the official dApp SDK.
   // Loaded lazily — it's a browser-only SDK (web components), so it must never
@@ -88,20 +106,26 @@ export default function Home() {
     setWalletParty(null);
   }, []);
 
-  const load = useCallback(async () => {
+  // Trigger a full agent run on the backend (the "click and watch" test path).
+  const runAgent = useCallback(async () => {
+    setAgentRunning(true);
+    setAgentOutput(null);
     try {
-      const [l, a] = await Promise.all([
-        fetch(`${GATEWAY}/listings`).then((r) => r.json()),
-        fetch(`${GATEWAY}/activity`).then((r) => r.json()),
-      ]);
-      setListings(l.listings ?? []);
-      setActivity(a.activity ?? []);
-      setLastFetch(new Date());
-      setPhase("ready");
-    } catch {
-      setPhase((p) => (p === "ready" ? p : "error"));
+      const r = await fetch(`${GATEWAY}/run-agent`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ task: agentTask }),
+      });
+      const d = await r.json();
+      setAgentOutput(d.output || "(no output)");
+      load();
+    } catch (e) {
+      setAgentOutput("Couldn't reach the agent: " + (e as Error).message);
+    } finally {
+      setAgentRunning(false);
     }
-  }, []);
+  }, [agentTask, load]);
+
 
   useEffect(() => {
     load();
@@ -164,6 +188,46 @@ export default function Home() {
               label="Last settlement"
               value={stats.latest ? timeAgo(stats.latest) : "—"}
             />
+          </section>
+
+          <section aria-label="Run the AI agent" className="mt-8">
+            <div className="rounded-lg border border-line bg-panel p-5">
+              <div className="flex items-center gap-2">
+                <Zap className="h-4 w-4 text-accent" aria-hidden />
+                <h2 className="text-lg font-bold tracking-tight">Run the AI agent</h2>
+              </div>
+              <p className="mt-1 text-sm text-muted">
+                Give it a task — it discovers services, pays on Canton in the right asset, and answers.
+                Settlements appear in the feed below.
+              </p>
+              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
+                <label htmlFor="agent-task" className="sr-only">
+                  Agent task
+                </label>
+                <input
+                  id="agent-task"
+                  value={agentTask}
+                  onChange={(e) => setAgentTask(e.target.value)}
+                  className={`${inputCls} flex-1`}
+                  placeholder="Get me the current BTC price…"
+                />
+                <button
+                  onClick={runAgent}
+                  disabled={agentRunning}
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-5 text-sm font-semibold text-onaccent disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+                >
+                  {agentRunning ? "Running…" : "Run agent"}
+                </button>
+              </div>
+              {agentRunning && !agentOutput && (
+                <p className="mt-3 text-sm text-muted">The agent is working — buying services and settling on Canton…</p>
+              )}
+              {agentOutput && (
+                <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-panel2 p-3 font-mono text-xs text-muted">
+                  {agentOutput}
+                </pre>
+              )}
+            </div>
           </section>
 
           <section aria-label="Service listings" className="mt-10">

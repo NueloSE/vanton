@@ -15,6 +15,8 @@
  */
 
 import "dotenv/config";
+import { spawn } from "node:child_process";
+import path from "node:path";
 import express, { type Response } from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
@@ -228,6 +230,26 @@ app.get("/activity", (_req, res) => {
 app.get("/free-sample", (_req, res) =>
   res.json({ sample: "hello from a provider API", value: Math.round(Math.random() * 1000), ts: new Date().toISOString() }),
 );
+
+// Run the AI agent server-side for a given task — powers the UI "Run agent"
+// button so anyone can trigger a full demo with one click (no terminal). The
+// agent runs in its own package dir (its .env holds the OpenAI + wallet creds).
+const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
+app.post("/run-agent", (req, res) => {
+  const task = String(req.body?.task || "Get me the current BTC price from the oracle.").slice(0, 300);
+  const agentDir = path.join(process.cwd(), "..", "agent");
+  const proc = spawn("npx", ["tsx", "src/ai-agent.ts", task], { cwd: agentDir });
+  let out = "";
+  const cap = (d: Buffer) => {
+    out += d.toString();
+    if (out.length > 20_000) out = out.slice(-20_000);
+  };
+  proc.stdout.on("data", cap);
+  proc.stderr.on("data", cap);
+  const timer = setTimeout(() => proc.kill(), 150_000);
+  proc.on("error", (e) => { clearTimeout(timer); if (!res.headersSent) res.status(500).json({ ok: false, output: e.message }); });
+  proc.on("close", (code) => { clearTimeout(timer); if (!res.headersSent) res.json({ ok: code === 0, output: stripAnsi(out).trim() }); });
+});
 
 // Wrapped-asset paid services (cBTC / cETH). Each settles in a registry token to
 // PROVIDER_PARTY: the initial request issues a token 402; the retry verifies the
