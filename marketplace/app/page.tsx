@@ -84,13 +84,18 @@ export default function Home() {
     setWalletError(null);
     try {
       const sdk = await import("@canton-network/dapp-sdk");
+      // Register the default adapters/gateways so the picker shows the full
+      // wallet list (Console Wallet, Send, WalletConnect, …), not just a bare gateway.
+      await sdk.init?.();
       await sdk.connect();
       const accounts = await sdk.listAccounts();
       const party = accounts?.[0]?.partyId;
       if (!party) throw new Error("Wallet returned no account");
       setWalletParty(party);
     } catch (e) {
-      setWalletError((e as Error)?.message || "Wallet connection failed");
+      setWalletError(
+        ((e as Error)?.message || "Wallet connection failed") + " — or just paste your party ID when listing.",
+      );
     } finally {
       setConnecting(false);
     }
