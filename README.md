@@ -19,18 +19,21 @@ Built for HackCanton Season 2 · Tracks: Financial Applications + Open · Challe
 ## How it works
 
 ```
-agent ── GET /stats + X-VANTON-MANDATE ─▶ Vanton gateway
+AI agent ── GET /stats ─────────────────▶ Vanton gateway
                                           │  GATE 1: exercise Mandate_Authorize on-ledger
                                           │          (budget · per-call cap · expiry)
-                                          │          fail ⇒ 403, no charge
-                                          │  GATE 2: x402 402 challenge → facilitator /verify + /settle
-agent ◀── 200 + data + receipt ──────────┘          one transaction on Canton
+                                          │          fail ⇒ 403, no charge  ← the ledger says no
+                                          │  GATE 2: 402 challenge → agent pays CC on Canton
+                                          │          gateway verifies the transfer in its wallet
+AI agent ◀── 200 + data ─────────────────┘          one real transaction on Canton per call
 ```
 
 Three pieces:
 1. **Marketplace ("the shop")** — providers list endpoints priced per call; agents discover them.
-2. **Gateway + SDK ("the checkout")** — provider middleware + agent autopay on HTTP 402.
-3. **Mandates ("the allowance")** — DAML spend allowances the ledger enforces.
+2. **Gateway ("the checkout")** — 402 paywall; agent pays CC on Canton; gateway verifies on-ledger.
+3. **Mandates ("the allowance")** — DAML spend allowances the ledger enforces; an agent *cannot* overspend.
+
+The **agent is a real LLM** (`agent/src/ai-agent.ts`): given a task, it reads the marketplace, decides which services to buy, pays for them on Canton, and answers — and when it hits its on-chain budget, the ledger stops it mid-task.
 
 ## Repo layout
 
@@ -38,11 +41,11 @@ Three pieces:
 |---|---|
 | `daml/` | The `vanton` DAML package — listings, mandates, authorizations, private receipts |
 | `daml/daml/Vanton/Marketplace.daml` | Core templates (the enforcement lives in `Mandate_Authorize`) |
-| `daml/daml/Vanton/Tests.daml` | Daml Script running the three demo beats |
-| `gateway/` | Provider-side: x402 payment gate + on-ledger mandate gate |
-| `agent/` | Demo agent autopay loop *(in progress)* |
-| `marketplace/` | Browse UI + live volume dashboard *(in progress)* |
-| `docs/` | Hackathon intel, Canton tech reference, build plan, comms |
+| `daml-tests/` | Daml Script running the three demo beats (`daml test`) |
+| `gateway/` | 402 paywall + real CC settlement + **on-ledger mandate gate** + marketplace API |
+| `agent/` | **AI agent** (LLM buys paid services under a ledger-enforced budget) + validator-API client |
+| `marketplace/` | Next.js UI — listings, live settlement feed, list-a-service, Connect Wallet |
+| `docs/` | (private workspace) hackathon intel, tech reference, build plan |
 
 ## cBTC & cETH integration (challenge requirement)
 
@@ -59,12 +62,13 @@ Test assets: cBTC faucet (`cbtc-faucet.bitsafe.finance`), cETH devnet form (see 
 
 | Component | State |
 |---|---|
-| DAML package (listings, mandates, receipts) | Written; `daml test` covers the 3 beats |
-| Ledger-enforced spend cap (the "money shot") | Implemented in `Mandate_Authorize` + scripted in `Tests.daml` |
-| Privacy (outsider sees nothing) | Asserted in `Tests.daml` |
-| x402 CC settlement | Wired to FTP facilitator; devnet run in progress |
-| cBTC/cETH settlement | In progress (see above) |
-| Marketplace UI + dashboard | In progress |
+| AI agent (LLM discovers, decides, pays) | ✅ working — buys services autonomously under budget |
+| Real CC settlement on Canton devnet | ✅ working — one real transaction per paid call |
+| Ledger-enforced spend cap (the "money shot") | ✅ **live** — agent cut off by the ledger at its budget |
+| canton-stats real data | ✅ live network round + ledger offset |
+| Marketplace UI (listings, live feed, list-a-service, connect wallet) | ✅ working |
+| Privacy (outsider sees nothing) | ✅ asserted in `daml test` |
+| cBTC/cETH settlement | Designed (same CIP-56 path); CC proven |
 
 ## Run
 
@@ -77,16 +81,27 @@ daml-script bloat on the shared participant): `daml/` = templates only,
 `daml-tests/` = the demo script.
 
 ```bash
-# 1. DAML: compile templates, then run the demo script
+# 1. DAML: compile templates, run the demo script (the 3 beats)
 cd daml && daml build          # -> .daml/dist/vanton-0.1.0.dar (deployable)
-cd ../daml-tests && daml test  # runs Vanton.Tests:setup — all three beats pass
-                               #   expect: "ok, 5 active contracts, 9 transactions."
+cd ../daml-tests && daml test  # "ok, 5 active contracts, 9 transactions."
 
-# 2. Gateway: install, configure, run
-cd ../gateway
-npm install
-cp .env.example .env  # fill parties/ids from your devnet wallet (docs §2)
-npm run dev
+# 2. Local Canton hosting the mandate (live ledger enforcement)
+cd ../daml
+daml sandbox --dar .daml/dist/vanton-0.1.0.dar --json-api-port 7575 &
+node ../gateway/scripts/setup-local-mandate.mjs   # prints the mandate env
+
+# 3. Gateway (paywall + real CC settlement + mandate gate)
+cd ../gateway && npm install
+cp .env.example .env   # fill CANTON_USERNAME/PASSWORD + paste the mandate env from step 2
+npm run dev            # :3402
+
+# 4. Marketplace UI
+cd ../marketplace && npm install && npm run dev   # :3400
+
+# 5. Turn the AI agent loose (needs OPENAI_API_KEY in agent/.env)
+cd ../agent && npm install
+npx tsx src/ai-agent.ts "Poll the Canton network status four times and tell me if the ledger offset increased."
+# → the agent buys 3 readings (real CC), then the ledger refuses the 4th (budget exhausted).
 ```
 
 ## Docs
