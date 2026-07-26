@@ -12,11 +12,13 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Activity, Plus, RefreshCw, Server, Wallet, X, Zap } from "lucide-react";
+import { Activity, Plus, RefreshCw, Search, Server, Wallet, X, Zap } from "lucide-react";
 import { SiteFooter } from "../_components/site-footer";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3402";
 const POLL_MS = 5000;
+const SERVICES_CAP = 6; // services shown before the "Show all" toggle
+const ACTIVITY_CAP = 20; // activity rows shown before the "View all" toggle
 
 interface Listing {
   id: string;
@@ -68,6 +70,10 @@ export default function Home() {
   const [budgetCETH, setBudgetCETH] = useState("0.05");
   const [settingBudget, setSettingBudget] = useState(false);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [serviceQuery, setServiceQuery] = useState("");
+  const [serviceCategory, setServiceCategory] = useState("all");
+  const [showAllServices, setShowAllServices] = useState(false);
+  const [showAllActivity, setShowAllActivity] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -197,8 +203,31 @@ export default function Home() {
     overCETH ? `exceeds your ${fmtCETH} cETH balance` : null,
   ].filter(Boolean);
 
+  // Presentational only: filter + window the already-fetched lists so the sections
+  // stay compact as the number of services / settlements grows. No data is refetched.
+  const categories = useMemo(
+    () => Array.from(new Set(listings.map((l) => l.category).filter(Boolean))).sort(),
+    [listings],
+  );
+  const filteredListings = useMemo(() => {
+    const q = serviceQuery.trim().toLowerCase();
+    return listings.filter((l) => {
+      const inCategory = serviceCategory === "all" || l.category === serviceCategory;
+      const inQuery =
+        !q ||
+        l.name.toLowerCase().includes(q) ||
+        (l.description ?? "").toLowerCase().includes(q) ||
+        (l.category ?? "").toLowerCase().includes(q);
+      return inCategory && inQuery;
+    });
+  }, [listings, serviceQuery, serviceCategory]);
+  const visibleListings = showAllServices
+    ? filteredListings
+    : filteredListings.slice(0, SERVICES_CAP);
+  const visibleActivity = showAllActivity ? activity : activity.slice(0, ACTIVITY_CAP);
+
   return (
-    <div className="flex min-h-dvh flex-col">
+    <div className="bg-dotgrid flex min-h-dvh flex-col">
       <Header
         live={phase === "ready"}
         lastFetch={lastFetch}
@@ -233,7 +262,21 @@ export default function Home() {
 
       {phase === "ready" && (
         <>
-          <section aria-label="Network stats" className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">
+          <div className="mb-10">
+            <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-accent">
+              Marketplace
+            </p>
+            <h2 className="mt-3 text-2xl font-bold tracking-tight md:text-3xl">
+              Live agent-payment marketplace.
+            </h2>
+            <p className="mt-2 max-w-2xl text-sm leading-relaxed text-muted md:text-base">
+              Set a budget the ledger enforces, run the agent, and watch every
+              call settle on Canton devnet — every number here is read from the
+              ledger.
+            </p>
+          </div>
+
+          <section aria-label="Network stats" className="grid grid-cols-2 gap-3 md:grid-cols-4">
             <Stat icon={Zap} label="Calls settled" value={String(stats.calls)} accent />
             <Stat icon={Wallet} label="Volume (CC)" value={stats.volume} />
             <Stat icon={Server} label="Services listed" value={String(stats.services)} />
@@ -246,48 +289,66 @@ export default function Home() {
 
           {balances && (
             <section aria-label="Agent wallet" className="mt-4">
-              <div className="flex flex-col gap-3 rounded-lg border border-line bg-panel px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
-                  <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-                    Agent wallet
-                  </span>
-                  <BalanceItem label="CC" value={balances.CC.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
-                  <BalanceItem label="cBTC" value={balances.cBTC.toFixed(4)} />
-                  <BalanceItem label="cETH" value={balances.cETH.toFixed(3)} />
-                </div>
-                <div className="flex flex-col gap-1.5 lg:items-end">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">Limits</span>
-                    <LimitInput label="CC" value={budgetCC} onChange={setBudgetCC} over={overCC} />
-                    <LimitInput label="cBTC" value={budgetCBTC} onChange={setBudgetCBTC} over={overCBTC} />
-                    <LimitInput label="cETH" value={budgetCETH} onChange={setBudgetCETH} over={overCETH} />
-                    <button
-                      type="button"
-                      onClick={setLimit}
-                      disabled={settingBudget}
-                      aria-busy={settingBudget}
-                      className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text transition-colors hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                    >
-                      {settingBudget ? "Setting…" : "Set / refill"}
-                    </button>
+              <div className="rounded-xl border border-line bg-panel p-5 md:p-6">
+                <div className="grid gap-6 lg:grid-cols-2 lg:gap-10">
+                  {/* On-ledger balances */}
+                  <div>
+                    <div className="flex items-baseline justify-between gap-3">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                        Agent wallet
+                      </span>
+                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted/60">
+                        on-ledger balance
+                      </span>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-3">
+                      <BalanceItem label="CC" value={balances.CC.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
+                      <BalanceItem label="cBTC" value={balances.cBTC.toFixed(4)} />
+                      <BalanceItem label="cETH" value={balances.cETH.toFixed(3)} />
+                    </div>
                   </div>
-                  {limitWarnings.length > 0 && (
-                    <p className="font-mono text-[11px] leading-relaxed text-accent/90">
-                      {limitWarnings.join(" · ")}
-                    </p>
-                  )}
+
+                  {/* Ledger-enforced spend limits */}
+                  <div className="lg:border-l lg:border-line lg:pl-10">
+                    <div className="flex items-center justify-between gap-3">
+                      <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+                        Spend limits
+                      </span>
+                      <button
+                        type="button"
+                        onClick={setLimit}
+                        disabled={settingBudget}
+                        aria-busy={settingBudget}
+                        className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text transition-colors hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                      >
+                        {settingBudget ? "Setting…" : "Set / refill"}
+                      </button>
+                    </div>
+                    <div className="mt-3 grid grid-cols-3 gap-3">
+                      <LimitInput label="CC" value={budgetCC} onChange={setBudgetCC} over={overCC} />
+                      <LimitInput label="cBTC" value={budgetCBTC} onChange={setBudgetCBTC} over={overCBTC} />
+                      <LimitInput label="cETH" value={budgetCETH} onChange={setBudgetCETH} over={overCETH} />
+                    </div>
+                    {limitWarnings.length > 0 && (
+                      <p className="mt-2.5 font-mono text-[11px] leading-relaxed text-accent/90">
+                        {limitWarnings.join(" · ")}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
             </section>
           )}
 
           <section aria-label="Run the AI agent" className="mt-8">
-            <div className="rounded-lg border border-line bg-panel p-5">
-              <div className="flex items-center gap-2">
-                <Zap className="h-4 w-4 text-accent" aria-hidden />
+            <div className="rounded-xl border border-line bg-panel p-5 md:p-6">
+              <div className="flex items-center gap-3">
+                <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-panel2 text-accent">
+                  <Zap className="h-5 w-5" aria-hidden />
+                </span>
                 <h2 className="text-lg font-bold tracking-tight">Run the AI agent</h2>
               </div>
-              <p className="mt-1 text-sm text-muted">
+              <p className="mt-3 text-sm text-muted">
                 Give it a task — it discovers services, pays on Canton in the right asset, and answers.
                 Settlements appear in the feed below.
               </p>
@@ -340,27 +401,122 @@ export default function Home() {
                 List a service
               </button>
             </div>
-            <div className="mt-4">
-              {listings.length === 0 ? (
+            {listings.length === 0 ? (
+              <div className="mt-4">
                 <EmptyListings onList={() => setShowList(true)} />
-              ) : (
-                <div className="grid gap-3 md:grid-cols-2">
-                  {listings.map((l) => (
-                    <ListingCard key={l.id} listing={l} />
-                  ))}
+              </div>
+            ) : (
+              <>
+                <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="relative w-full sm:max-w-xs">
+                    <Search
+                      className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted"
+                      aria-hidden
+                    />
+                    <input
+                      type="search"
+                      value={serviceQuery}
+                      onChange={(e) => {
+                        setServiceQuery(e.target.value);
+                        setShowAllServices(false);
+                      }}
+                      placeholder="Search services…"
+                      aria-label="Search services"
+                      className="h-9 w-full rounded-md border border-line bg-panel2 pl-9 pr-3 text-sm text-text placeholder:text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+                    />
+                  </div>
+                  {categories.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <CategoryChip
+                        label="All"
+                        active={serviceCategory === "all"}
+                        onClick={() => {
+                          setServiceCategory("all");
+                          setShowAllServices(false);
+                        }}
+                      />
+                      {categories.map((c) => (
+                        <CategoryChip
+                          key={c}
+                          label={c}
+                          active={serviceCategory === c}
+                          onClick={() => {
+                            setServiceCategory(c);
+                            setShowAllServices(false);
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
+
+                <div className="mt-4">
+                  {filteredListings.length === 0 ? (
+                    <div className="rounded-xl border border-line bg-panel py-10 text-center text-sm text-muted">
+                      No services match
+                      {serviceQuery ? ` “${serviceQuery.trim()}”` : ""}
+                      {serviceCategory !== "all" ? ` in ${serviceCategory}` : ""}.
+                    </div>
+                  ) : (
+                    <div className="grid gap-3 md:grid-cols-2">
+                      {visibleListings.map((l) => (
+                        <ListingCard key={l.id} listing={l} />
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {filteredListings.length > SERVICES_CAP && (
+                  <div className="mt-5 flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setShowAllServices((v) => !v)}
+                      className="inline-flex h-9 items-center gap-2 rounded-md border border-line bg-panel2 px-4 text-sm font-medium text-text transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+                    >
+                      {showAllServices
+                        ? "Show less"
+                        : `Show all ${filteredListings.length}`}
+                    </button>
+                  </div>
+                )}
+              </>
+            )}
           </section>
 
           <section aria-label="Live settlement activity" className="mt-10">
-            <SectionTitle>Live activity</SectionTitle>
-            <p className="mt-1 text-sm text-muted">
-              Every row is a real transaction on Canton devnet, verified on-ledger before the service was served.
-            </p>
-            <div className="mt-4">
-              {activity.length === 0 ? <EmptyActivity /> : <ActivityTable rows={activity} />}
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <SectionTitle>Live activity</SectionTitle>
+                <p className="mt-1 text-sm text-muted">
+                  Every row is a real transaction on Canton devnet, verified on-ledger before the service was served.
+                </p>
+              </div>
+              {activity.length > 0 && (
+                <span className="mt-1 shrink-0 font-mono text-[11px] uppercase tracking-[0.12em] text-muted">
+                  {showAllActivity
+                    ? `${activity.length} settled`
+                    : `Latest ${Math.min(ACTIVITY_CAP, activity.length)} · ${activity.length} settled`}
+                </span>
+              )}
             </div>
+            <div className="mt-4">
+              {activity.length === 0 ? (
+                <EmptyActivity />
+              ) : (
+                <ActivityTable rows={visibleActivity} />
+              )}
+            </div>
+            {activity.length > ACTIVITY_CAP && (
+              <div className="mt-5 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setShowAllActivity((v) => !v)}
+                  className="inline-flex h-9 items-center gap-2 rounded-md border border-line bg-panel2 px-4 text-sm font-medium text-text transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+                >
+                  {showAllActivity ? "Show latest" : `View all ${activity.length}`}
+                </button>
+              </div>
+            )}
           </section>
         </>
       )}
@@ -401,7 +557,7 @@ function Header({
   onDisconnect: () => void;
 }) {
   return (
-    <header className="border-b border-line">
+    <header className="sticky top-0 z-40 border-b border-line bg-ink/95">
       <h1 className="sr-only">Vanton</h1>
       <div className="flex items-center justify-between gap-4 px-5 py-4 md:px-8 lg:px-10">
         <Link
@@ -460,7 +616,7 @@ function Header({
 }
 
 function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-lg font-bold tracking-tight">{children}</h2>;
+  return <h2 className="text-xl font-bold tracking-tight">{children}</h2>;
 }
 
 function Stat({
@@ -475,13 +631,13 @@ function Stat({
   accent?: boolean;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-panel p-4">
+    <div className="rounded-xl border border-line bg-panel p-5">
       <div className="flex items-center gap-2 text-muted">
         <Icon className="h-4 w-4" aria-hidden />
         <span className="font-mono text-[11px] uppercase tracking-[0.12em]">{label}</span>
       </div>
       <p
-        className={`mt-2 font-mono text-2xl font-semibold tabular-nums ${accent ? "text-accent" : "text-text"}`}
+        className={`mt-3 font-mono text-3xl font-semibold tabular-nums ${accent ? "text-accent" : "text-text"}`}
       >
         {value}
       </p>
@@ -491,10 +647,12 @@ function Stat({
 
 function BalanceItem({ label, value }: { label: string; value: string }) {
   return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="font-mono text-lg font-semibold tabular-nums text-text">{value}</span>
-      <span className="font-mono text-xs text-accent">{label}</span>
-    </span>
+    <div className="rounded-lg border border-line bg-panel2 px-3 py-2.5">
+      <div className="truncate font-mono text-lg font-semibold tabular-nums text-text" title={value}>
+        {value}
+      </div>
+      <div className="mt-0.5 font-mono text-[11px] text-accent">{label}</div>
+    </div>
   );
 }
 
@@ -510,36 +668,61 @@ function LimitInput({
   over?: boolean;
 }) {
   return (
-    <span className="inline-flex items-center gap-1">
+    <label className="flex flex-col gap-1.5">
+      <span className="font-mono text-[11px] text-accent">{label}</span>
       <input
         value={value}
         onChange={(e) => onChange(e.target.value)}
         inputMode="decimal"
         aria-label={`${label} limit`}
-        className={`h-8 w-16 rounded-md border bg-panel2 px-2 font-mono text-xs tabular-nums text-text transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        className={`h-9 w-full rounded-md border bg-panel2 px-2.5 font-mono text-sm tabular-nums text-text transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           over ? "border-accent/70" : "border-line"
         }`}
       />
-      <span className="font-mono text-[11px] text-accent">{label}</span>
-    </span>
+    </label>
+  );
+}
+
+function CategoryChip({
+  label,
+  active,
+  onClick,
+}: {
+  label: string;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`inline-flex h-8 items-center rounded-full border px-3 font-mono text-[11px] uppercase tracking-[0.08em] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        active
+          ? "border-accent/50 bg-accent/10 text-accent"
+          : "border-line bg-panel2 text-muted hover:border-accent/40 hover:text-text"
+      }`}
+    >
+      {label}
+    </button>
   );
 }
 
 function ListingCard({ listing }: { listing: Listing }) {
   return (
-    <article className="flex flex-col gap-3 rounded-lg border border-line bg-panel p-5">
+    <article className="flex flex-col gap-3 rounded-xl border border-line bg-panel p-5 transition-colors hover:border-accent/30">
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold">{listing.name}</h3>
-          <p className="mt-1 text-sm text-muted">{listing.description || "—"}</p>
+          <h3 className="font-semibold tracking-tight">{listing.name}</h3>
+          <p className="mt-1 text-sm leading-relaxed text-muted">{listing.description || "—"}</p>
         </div>
         <span className="shrink-0 rounded-full border border-line bg-panel2 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
           {listing.category}
         </span>
       </div>
-      <div className="mt-auto flex items-center justify-between border-t border-line pt-3">
+      <div className="mt-auto flex items-center justify-between border-t border-line pt-3.5">
         <span className="font-mono text-sm tabular-nums">
-          <span className="font-semibold text-accent">{listing.priceAmount}</span>{" "}
+          <span className="text-base font-semibold text-accent">{listing.priceAmount}</span>{" "}
           <span className="text-muted">{listing.priceAsset} / call</span>
         </span>
         <span className="font-mono text-xs text-muted" title={listing.provider}>
@@ -552,14 +735,14 @@ function ListingCard({ listing }: { listing: Listing }) {
 
 function ActivityTable({ rows }: { rows: Settled[] }) {
   return (
-    <div className="overflow-x-auto rounded-lg border border-line">
+    <div className="overflow-x-auto rounded-xl border border-line">
       <table className="w-full min-w-160 border-collapse text-sm">
         <thead>
           <tr className="border-b border-line bg-panel2 text-left">
             {["Settled", "Service", "Amount", "Payer", "On-ledger event"].map((h) => (
               <th
                 key={h}
-                className="px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted"
+                className="px-4 py-3 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted"
               >
                 {h}
               </th>
@@ -568,19 +751,25 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
         </thead>
         <tbody>
           {rows.map((r) => (
-            <tr key={r.reference} className="border-b border-line bg-panel last:border-b-0">
-              <td className="px-4 py-3 font-mono text-xs tabular-nums text-muted">
+            <tr
+              key={r.reference}
+              className="border-b border-line bg-panel transition-colors last:border-b-0 hover:bg-panel2/50"
+            >
+              <td className="px-4 py-3.5 font-mono text-xs tabular-nums text-muted">
                 {timeAgo(r.settledAt)}
               </td>
-              <td className="px-4 py-3 font-medium">{r.service}</td>
-              <td className="px-4 py-3 font-mono tabular-nums">
+              <td className="px-4 py-3.5 font-medium">{r.service}</td>
+              <td className="px-4 py-3.5 font-mono tabular-nums">
                 <span className="text-good">{r.price}</span> <span className="text-muted">{r.asset ?? "CC"}</span>
               </td>
-              <td className="px-4 py-3 font-mono text-xs text-muted" title={r.sender}>
+              <td className="px-4 py-3.5 font-mono text-xs text-muted" title={r.sender}>
                 {shortParty(r.sender)}
               </td>
-              <td className="px-4 py-3 font-mono text-xs text-muted" title={r.eventId || "settled on-ledger"}>
-                {r.eventId ? shortEvent(r.eventId) : "settled"}
+              <td className="px-4 py-3.5 font-mono text-xs text-muted" title={r.eventId || "settled on-ledger"}>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-good" aria-hidden />
+                  {r.eventId ? shortEvent(r.eventId) : "settled"}
+                </span>
               </td>
             </tr>
           ))}
@@ -592,7 +781,7 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
 
 function EmptyActivity() {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-lg border border-line bg-panel py-12 text-center">
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-line bg-panel py-14 text-center">
       <Activity className="h-8 w-8 text-muted" aria-hidden />
       <div>
         <p className="text-sm font-medium">No settlements yet</p>
@@ -607,7 +796,7 @@ function EmptyActivity() {
 
 function EmptyListings({ onList }: { onList: () => void }) {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-lg border border-line bg-panel py-12 text-center">
+    <div className="flex flex-col items-center gap-3 rounded-xl border border-line bg-panel py-14 text-center">
       <Server className="h-8 w-8 text-muted" aria-hidden />
       <div>
         <p className="text-sm font-medium">No services listed yet</p>
@@ -844,18 +1033,19 @@ function Field({
 
 function PageSkeleton() {
   return (
-    <div className="mt-8 space-y-10" aria-hidden>
+    <div className="space-y-10" aria-hidden>
+      <div className="h-16 w-full max-w-md rounded-xl bg-panel motion-safe:animate-pulse" />
       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
         {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-24 rounded-lg bg-panel motion-safe:animate-pulse" />
+          <div key={i} className="h-28 rounded-xl bg-panel motion-safe:animate-pulse" />
         ))}
       </div>
       <div className="grid gap-3 md:grid-cols-2">
         {Array.from({ length: 2 }).map((_, i) => (
-          <div key={i} className="h-36 rounded-lg bg-panel motion-safe:animate-pulse" />
+          <div key={i} className="h-36 rounded-xl bg-panel motion-safe:animate-pulse" />
         ))}
       </div>
-      <div className="h-64 rounded-lg bg-panel motion-safe:animate-pulse" />
+      <div className="h-64 rounded-xl bg-panel motion-safe:animate-pulse" />
     </div>
   );
 }

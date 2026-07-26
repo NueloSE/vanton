@@ -11,3 +11,4 @@ build/
 .next/
 coverage/
 gateway/data/
+pdf/

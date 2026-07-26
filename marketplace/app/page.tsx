@@ -9,6 +9,8 @@
 
 import Link from "next/link";
 import { SiteFooter } from "./_components/site-footer";
+import { Partners } from "./_components/partners";
+import { SplineBackground } from "./_components/spline-background";
 import {
   ArrowRight,
   ArrowUpRight,
@@ -100,8 +102,20 @@ export default function Landing() {
       </header>
 
       <main className="flex-1">
-        {/* Hero — faint amber glow + whisper of dot-grid for depth. */}
-        <section className="hero-glow bg-dotgrid relative overflow-hidden border-b border-line">
+        {/* Hero — decorative floating 3D scene behind the content (Vanton-tinted). */}
+        <section className="relative overflow-hidden border-b border-line bg-ink">
+          {/* 3D background — pointer-events-none so it never captures scroll/clicks */}
+          <div
+            className="pointer-events-none absolute inset-0"
+            style={{ filter: "hue-rotate(-78deg) saturate(1.1) brightness(0.9)" }}
+          >
+            <SplineBackground />
+          </div>
+          {/* Even, gentle scrim so the scene reads across the whole hero, plus a
+              soft left reinforcement to keep the headline/pills legible. */}
+          <div className="pointer-events-none absolute inset-0 z-1 bg-ink/40" />
+          <div className="pointer-events-none absolute inset-0 z-1 bg-linear-to-r from-ink/45 via-transparent to-transparent" />
+
           <div className="relative z-10 mx-auto grid max-w-6xl items-center gap-12 px-4 py-16 md:px-6 md:py-24 lg:grid-cols-[1.05fr_0.95fr]">
             <div>
               <span
@@ -264,6 +278,24 @@ export default function Landing() {
           </div>
         </section>
 
+        {/* Ecosystem / partners marquee — full-bleed */}
+        <section aria-label="Partners" className="border-t border-line py-16 md:py-20">
+          <div className="mx-auto max-w-6xl px-4 text-center md:px-6">
+            <p className="font-mono text-[11px] font-semibold uppercase tracking-[0.2em] text-accent">
+              Ecosystem
+            </p>
+            <h2 className="mt-3 text-2xl font-bold tracking-tight md:text-3xl">
+              Our partners
+            </h2>
+            <p className="mx-auto mt-3 max-w-md text-sm leading-relaxed text-muted">
+              Built on the Canton Network, alongside the teams behind HackCanton
+              Season 2.
+            </p>
+          </div>
+          <div className="relative mt-12 w-full">
+            <Partners />
+          </div>
+        </section>
       </main>
 
       <SiteFooter />

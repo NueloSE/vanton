@@ -11,6 +11,8 @@
   },
   "dependencies": {
     "@canton-network/dapp-sdk": "^1.4.0",
+    "@splinetool/react-spline": "^4.1.0",
+    "@splinetool/runtime": "^1.12.98",
     "@walletconnect/sign-client": "^2.23.10",
     "lucide-react": "^0.454.0",
     "next": "^15.1.0",

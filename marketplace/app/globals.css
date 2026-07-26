@@ -73,6 +73,12 @@ body {
   pointer-events: none;
 }
 
+/* Partner marquee: the sponsor logos are light marks on solid black, so `lighten`
+   drops the black background and floats the marks on the page. */
+.partner-loop .logoloop__item img {
+  mix-blend-mode: lighten;
+}
+
 /* Live-dot pulse — decorative, so disabled under reduced motion. */
 @media (prefers-reduced-motion: no-preference) {
   .pulse-dot {
