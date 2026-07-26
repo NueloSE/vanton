@@ -94,6 +94,6 @@ const offers = await pendingOffers();
 if (!offers.length) { console.log("no pending token transfers"); process.exit(0); }
 for (const o of offers) {
   process.stdout.write(`accepting ${o.amount} ${o.id} … `);
-  try { await accept(o); console.log("✓"); }
-  catch (e) { console.log("✗\n  " + (e.message || e)); }
+  try { await accept(o); console.log(""); }
+  catch (e) { console.log("x \n  " + (e.message || e)); }
 }

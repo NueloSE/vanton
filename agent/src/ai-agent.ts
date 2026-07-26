@@ -64,7 +64,7 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
 
   if (challengeRes.status === 403) {
     const d = (await challengeRes.json().catch(() => ({}))) as { reason?: string; budgetRemaining?: string };
-    log(c.amber(`      ⛔ ledger refused the spend: ${d.reason} (on-chain budget left ${d.budgetRemaining ?? "0"})`));
+    log(c.amber(`      ledger refused the spend: ${d.reason} (on-chain budget left ${d.budgetRemaining ?? "0"})`));
     return {
       ok: false,
       error: `The Canton ledger REFUSED this purchase (${d.reason ?? "not authorized"}). The on-chain spending budget is exhausted; you cannot buy anything more.`,
@@ -79,10 +79,10 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
   if (ch.asset === "cBTC" || ch.asset === "cETH") {
     const payer = AGENT_PARTY || (await getPartyId()); // spend from the agent's own wallet
     const updateId = await payToken(ch.asset, ch.price, payer, ch.payTo);
-    log(c.teal(`      ✓ settled ${ch.price} ${ch.asset} from agent wallet (${updateId.slice(0, 12)}…)`));
+    log(c.teal(`      settled ${ch.price} ${ch.asset} from agent wallet (${updateId.slice(0, 12)}…)`));
   } else {
     await payDirect(ch.payTo, ch.price, ch.reference); // CC via validator API
-    log(c.teal(`      ✓ paid ${ch.price} CC on-ledger`));
+    log(c.teal(`      paid ${ch.price} CC on-ledger`));
   }
 
   spent[ch.asset] = (spent[ch.asset] ?? 0) + Number(ch.price);
@@ -152,11 +152,11 @@ async function main() {
         if (tc.type !== "function") continue;
         const args = JSON.parse(tc.function.arguments || "{}");
         const listing = listings.find((l) => l.id === args.service_id);
-        log(c.amber(`  ◆ agent decides to buy: ${args.service_id}`));
+        log(c.amber(`  - agent decides to buy: ${args.service_id}`));
         const result = listing
           ? await buyService(listing)
           : { ok: false, error: `no such service ${args.service_id}` };
-        if (!result.ok) log(c.dim(`      ✗ ${result.error}`));
+        if (!result.ok) log(c.dim(`      x ${result.error}`));
         messages.push({
           role: "tool",
           tool_call_id: tc.id,

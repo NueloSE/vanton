@@ -117,4 +117,4 @@ await lj("/v2/commands/submit-and-wait-for-transaction", {
     commandId: `vanton-accept-${Date.now()}`, actAs: [PROVIDER], readAs: [], disclosedContracts: disc(actx.disclosedContracts),
   },
 });
-console.log(`✓ ${AMOUNT} ${ASSET} settled: ${ME.slice(0, 16)}… → vanton-provider`);
+console.log(`${AMOUNT} ${ASSET} settled: ${ME.slice(0, 16)}… → vanton-provider`);

@@ -62,13 +62,13 @@ Test assets: cBTC faucet (`cbtc-faucet.bitsafe.finance`), cETH devnet form (see 
 
 | Component | State |
 |---|---|
-| AI agent (LLM discovers, decides, pays) | ✅ working — buys services autonomously under budget |
-| Real CC settlement on Canton devnet | ✅ working — one real transaction per paid call |
-| Ledger-enforced spend cap (the "money shot") | ✅ **live** — agent cut off by the ledger at its budget |
-| canton-stats real data | ✅ live network round + ledger offset |
-| Marketplace UI (listings, live feed, list-a-service, connect wallet) | ✅ working |
-| Privacy (outsider sees nothing) | ✅ verified on the shared node (`vanton-outsider` sees 0) |
-| **cBTC + cETH settlement** | ✅ **working** — agents pay per call in cBTC/cETH (two-party token transfers, gateway-verified) |
+| AI agent (LLM discovers, decides, pays) | working — buys services autonomously under budget |
+| Real CC settlement on Canton devnet | working — one real transaction per paid call |
+| Ledger-enforced spend cap (the "money shot") | **live** — agent cut off by the ledger at its budget |
+| canton-stats real data | live network round + ledger offset |
+| Marketplace UI (listings, live feed, list-a-service, connect wallet) | working |
+| Privacy (outsider sees nothing) | verified on the shared node (`vanton-outsider` sees 0) |
+| **cBTC + cETH settlement** | **working** — agents pay per call in cBTC/cETH (two-party token transfers, gateway-verified) |
 
 ## Run
 

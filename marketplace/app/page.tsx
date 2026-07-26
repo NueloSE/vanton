@@ -513,7 +513,7 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
                 {shortParty(r.sender)}
               </td>
               <td className="px-4 py-3 font-mono text-xs text-muted" title={r.eventId || "settled on-ledger"}>
-                {r.eventId ? shortEvent(r.eventId) : "settled ✓"}
+                {r.eventId ? shortEvent(r.eventId) : "settled"}
               </td>
             </tr>
           ))}
