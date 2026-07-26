@@ -1,770 +1,650 @@
-"use client";
-
 /**
- * Vanton marketplace — one screen, three jobs:
- *   1. Browse the services agents can buy (gateway /listings).
- *   2. Let a provider list a new service (gateway POST /listings).
- *   3. Watch real payments settle on Canton, live (gateway /activity, polled).
+ * Vanton landing — the first thing a visitor sees.
  *
- * Every number shown is read from the gateway, which reads the ledger — no
- * fabricated data.
+ * Tells a first-time visitor what Vanton is in five seconds, then hands them off
+ * to the live marketplace at /app. Static, no data fetching: every real number
+ * lives in the dashboard, which reads it from the gateway/ledger. The mockups
+ * below are faithful, non-live replicas of the actual product surfaces.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Activity, Plus, RefreshCw, Server, Wallet, X, Zap } from "lucide-react";
+import Link from "next/link";
+import {
+  ArrowRight,
+  ArrowUpRight,
+  Boxes,
+  Check,
+  Coins,
+  EyeOff,
+  ListPlus,
+  Lock,
+  Network,
+  Search,
+  ShieldCheck,
+  Wallet,
+  X,
+  Zap,
+} from "lucide-react";
 
-const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3402";
-const POLL_MS = 5000;
+const REPO = "https://github.com/NueloSE/vanton";
 
-interface Listing {
-  id: string;
-  name: string;
-  provider: string;
-  priceAmount: string;
-  priceAsset: string;
-  category: string;
-  endpoint: string;
-  description: string;
-}
+const primaryBtn =
+  "inline-flex items-center justify-center gap-2 rounded-md bg-accent px-5 text-sm font-semibold text-onaccent transition-[background-color,transform] hover:bg-accent/90 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink";
 
-interface Settled {
-  reference: string;
-  price: string;
-  service: string;
-  settledAt: string;
-  eventId: string;
-  sender?: string;
-  asset?: string;
-}
+const secondaryBtn =
+  "inline-flex items-center justify-center gap-2 rounded-md border border-line bg-panel px-5 text-sm font-medium text-text transition-colors hover:border-accent/50 active:translate-y-px focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink";
 
-type Phase = "loading" | "error" | "ready";
+const eyebrow =
+  "inline-flex items-center gap-2 font-mono text-[11px] font-semibold uppercase tracking-[0.18em] text-accent";
 
-const shortParty = (p?: string) => (p ? `${p.slice(0, 10)}…${p.slice(-6)}` : "—");
-const shortEvent = (e: string) => `${e.slice(0, 14)}…`;
-const timeAgo = (iso: string) => {
-  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
-  if (s < 60) return `${Math.floor(s)}s ago`;
-  if (s < 3600) return `${Math.floor(s / 60)}m ago`;
-  return `${Math.floor(s / 3600)}h ago`;
-};
+const FLOW = [
+  {
+    n: "01",
+    icon: ListPlus,
+    title: "List a service",
+    body: "A provider registers an API or data feed and sets a price per call.",
+  },
+  {
+    n: "02",
+    icon: Search,
+    title: "An agent discovers it",
+    body: "An AI agent reads the marketplace and picks the services its task needs.",
+  },
+  {
+    n: "03",
+    icon: Zap,
+    title: "It pays per call",
+    body: "Each call settles on Canton, under a budget the ledger enforces.",
+  },
+  {
+    n: "04",
+    icon: Wallet,
+    title: "You earn",
+    body: "Payment lands in the provider's wallet on-ledger, seen only by both parties.",
+  },
+];
 
-export default function Home() {
-  const [phase, setPhase] = useState<Phase>("loading");
-  const [listings, setListings] = useState<Listing[]>([]);
-  const [activity, setActivity] = useState<Settled[]>([]);
-  const [lastFetch, setLastFetch] = useState<Date | null>(null);
-  const [showList, setShowList] = useState(false);
-  const [walletParty, setWalletParty] = useState<string | null>(null);
-  const [connecting, setConnecting] = useState(false);
-  const [walletError, setWalletError] = useState<string | null>(null);
-  const [agentTask, setAgentTask] = useState("");
-  const [agentRunning, setAgentRunning] = useState(false);
-  const [agentOutput, setAgentOutput] = useState<string | null>(null);
-  const [balances, setBalances] = useState<{ CC: number; cBTC: number; cETH: number } | null>(null);
-  const [budgetCC, setBudgetCC] = useState("0.05");
-  const [budgetCBTC, setBudgetCBTC] = useState("0.005");
-  const [budgetCETH, setBudgetCETH] = useState("0.05");
-  const [settingBudget, setSettingBudget] = useState(false);
-  const timer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const load = useCallback(async () => {
-    try {
-      const [l, a, b] = await Promise.all([
-        fetch(`${GATEWAY}/listings`).then((r) => r.json()),
-        fetch(`${GATEWAY}/activity`).then((r) => r.json()),
-        fetch(`${GATEWAY}/balances`).then((r) => r.json()).catch(() => null),
-      ]);
-      setListings(l.listings ?? []);
-      setActivity(a.activity ?? []);
-      setBalances(b && !b.error ? b : null);
-      setLastFetch(new Date());
-      setPhase("ready");
-    } catch {
-      setPhase((p) => (p === "ready" ? p : "error"));
-    }
-  }, []);
-
-  // Connect a Canton wallet (Console Wallet et al.) via the official dApp SDK.
-  // Loaded lazily — it's a browser-only SDK (web components), so it must never
-  // run during SSR.
-  const connectWallet = useCallback(async () => {
-    setConnecting(true);
-    setWalletError(null);
-    try {
-      const sdk = await import("@canton-network/dapp-sdk");
-      // Register the default adapters/gateways so the picker shows the full
-      // wallet list (Console Wallet, Send, WalletConnect, …), not just a bare gateway.
-      await sdk.init?.();
-      await sdk.connect();
-      const accounts = await sdk.listAccounts();
-      const party = accounts?.[0]?.partyId;
-      if (!party) throw new Error("Wallet returned no account");
-      setWalletParty(party);
-    } catch (e) {
-      setWalletError(
-        ((e as Error)?.message || "Wallet connection failed") + " — or just paste your party ID when listing.",
-      );
-    } finally {
-      setConnecting(false);
-    }
-  }, []);
-
-  const disconnectWallet = useCallback(async () => {
-    try {
-      const sdk = await import("@canton-network/dapp-sdk");
-      await sdk.disconnect?.();
-    } catch {
-      /* ignore */
-    }
-    setWalletParty(null);
-  }, []);
-
-  // Set / refill the agent's on-ledger spending limit (creates fresh mandates).
-  const setLimit = useCallback(async () => {
-    setSettingBudget(true);
-    try {
-      await fetch(`${GATEWAY}/set-budget`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ budgetCC, budgetCBTC, budgetCETH }),
-      });
-      load();
-    } catch {
-      /* ignore */
-    } finally {
-      setSettingBudget(false);
-    }
-  }, [budgetCC, budgetCBTC, budgetCETH, load]);
-
-  // Trigger a full agent run on the backend (the "click and watch" test path).
-  const runAgent = useCallback(async () => {
-    setAgentRunning(true);
-    setAgentOutput(null);
-    try {
-      const r = await fetch(`${GATEWAY}/run-agent`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          task: agentTask || "Get me the current BTC price, then a premium ETH momentum signal.",
-        }),
-      });
-      const d = await r.json();
-      setAgentOutput(d.output || "(no output)");
-      load();
-    } catch (e) {
-      setAgentOutput("Couldn't reach the agent: " + (e as Error).message);
-    } finally {
-      setAgentRunning(false);
-    }
-  }, [agentTask, load]);
-
-
-  useEffect(() => {
-    load();
-    timer.current = setInterval(load, POLL_MS);
-    return () => {
-      if (timer.current) clearInterval(timer.current);
-    };
-  }, [load]);
-
-  const stats = useMemo(() => {
-    // Volume is CC-only (assets don't sum); per-asset totals live in the wallet strip.
-    const ccVolume = activity
-      .filter((x) => (x.asset ?? "CC") === "CC")
-      .reduce((s, x) => s + Number(x.price || 0), 0);
-    return {
-      calls: activity.length,
-      volume: ccVolume.toFixed(2),
-      services: listings.length,
-      latest: activity[0]?.settledAt,
-    };
-  }, [activity, listings]);
-
+export default function Landing() {
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-12">
-      <Header
-        live={phase === "ready"}
-        lastFetch={lastFetch}
-        walletParty={walletParty}
-        connecting={connecting}
-        walletError={walletError}
-        onConnect={connectWallet}
-        onDisconnect={disconnectWallet}
-      />
-
-      {phase === "loading" && <PageSkeleton />}
-
-      {phase === "error" && (
-        <div className="mt-10 flex flex-col items-start gap-3 rounded-lg border border-bad/30 bg-bad/5 p-5">
-          <p className="text-sm font-medium text-bad">Can&apos;t reach the Vanton gateway</p>
-          <p className="text-sm text-muted">
-            The gateway at <span className="font-mono">{GATEWAY}</span> isn&apos;t responding. Start
-            it with <span className="font-mono">npm run dev</span> in{" "}
-            <span className="font-mono">gateway/</span>, then retry.
-          </p>
-          <button
-            onClick={load}
-            className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-onaccent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
-          >
-            <RefreshCw className="h-4 w-4" aria-hidden />
-            Retry
-          </button>
+    <div className="flex min-h-dvh flex-col">
+      {/* Sticky top nav — full-bleed, solid (no glass), on-brand. */}
+      <header className="sticky top-0 z-40 border-b border-line bg-ink/95">
+        <div className="flex items-center justify-between px-5 py-4 md:px-8 lg:px-10">
+          <div className="flex items-center gap-3 md:gap-4">
+            <Link
+              href="/"
+              aria-label="Vanton home"
+              className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src="/logo-clean.png" alt="Vanton" className="h-11 w-auto md:h-12" />
+            </Link>
+            <span className="hidden items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.14em] text-muted sm:inline-flex">
+              <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-good" aria-hidden />
+              Live on Canton devnet
+            </span>
+          </div>
+          <nav className="flex items-center gap-2 sm:gap-3">
+            <a
+              href="#how"
+              className="hidden h-10 items-center rounded-md px-3 text-sm font-medium text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink sm:inline-flex"
+            >
+              How it works
+            </a>
+            <Link href="/app" className={`${primaryBtn} h-10`}>
+              Launch marketplace
+              <ArrowRight className="h-4 w-4" aria-hidden />
+            </Link>
+          </nav>
         </div>
-      )}
+      </header>
 
-      {phase === "ready" && (
-        <>
-          <section aria-label="Network stats" className="mt-8 grid grid-cols-2 gap-3 md:grid-cols-4">
-            <Stat icon={Zap} label="Calls settled" value={String(stats.calls)} accent />
-            <Stat icon={Wallet} label="Volume (CC)" value={stats.volume} />
-            <Stat icon={Server} label="Services listed" value={String(stats.services)} />
-            <Stat
-              icon={Activity}
-              label="Last settlement"
-              value={stats.latest ? timeAgo(stats.latest) : "—"}
-            />
-          </section>
-
-          {balances && (
-            <section aria-label="Agent wallet" className="mt-4">
-              <div className="flex flex-col gap-3 rounded-lg border border-line bg-panel px-4 py-3 lg:flex-row lg:items-center lg:justify-between">
-                <div className="flex flex-wrap items-center gap-x-8 gap-y-2">
-                  <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
-                    Agent wallet
-                  </span>
-                  <BalanceItem label="CC" value={balances.CC.toLocaleString(undefined, { maximumFractionDigits: 2 })} />
-                  <BalanceItem label="cBTC" value={balances.cBTC.toFixed(4)} />
-                  <BalanceItem label="cETH" value={balances.cETH.toFixed(3)} />
-                </div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono text-[11px] uppercase tracking-[0.12em] text-muted">Limits</span>
-                  <LimitInput label="CC" value={budgetCC} onChange={setBudgetCC} />
-                  <LimitInput label="cBTC" value={budgetCBTC} onChange={setBudgetCBTC} />
-                  <LimitInput label="cETH" value={budgetCETH} onChange={setBudgetCETH} />
-                  <button
-                    onClick={setLimit}
-                    disabled={settingBudget}
-                    className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-                  >
-                    {settingBudget ? "Setting…" : "Set / refill"}
-                  </button>
-                </div>
-              </div>
-            </section>
-          )}
-
-          <section aria-label="Run the AI agent" className="mt-8">
-            <div className="rounded-lg border border-line bg-panel p-5">
-              <div className="flex items-center gap-2">
-                <Zap className="h-4 w-4 text-accent" aria-hidden />
-                <h2 className="text-lg font-bold tracking-tight">Run the AI agent</h2>
-              </div>
-              <p className="mt-1 text-sm text-muted">
-                Give it a task — it discovers services, pays on Canton in the right asset, and answers.
-                Settlements appear in the feed below.
-              </p>
-              <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-                <label htmlFor="agent-task" className="sr-only">
-                  Agent task
-                </label>
-                <input
-                  id="agent-task"
-                  value={agentTask}
-                  onChange={(e) => setAgentTask(e.target.value)}
-                  className={`${inputCls} flex-1`}
-                  placeholder="e.g. Get me the current BTC price, then a premium ETH signal."
-                />
-                <button
-                  onClick={runAgent}
-                  disabled={agentRunning}
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-5 text-sm font-semibold text-onaccent disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
-                >
-                  {agentRunning ? "Running…" : "Run agent"}
-                </button>
-              </div>
-              {agentRunning && !agentOutput && (
-                <p className="mt-3 text-sm text-muted">The agent is working — buying services and settling on Canton…</p>
-              )}
-              {agentOutput && (
-                <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap rounded-md border border-line bg-panel2 p-3 font-mono text-xs text-muted">
-                  {agentOutput}
-                </pre>
-              )}
-            </div>
-          </section>
-
-          <section aria-label="Service listings" className="mt-10">
-            <div className="flex items-center justify-between gap-4">
-              <SectionTitle>Services</SectionTitle>
-              <button
-                onClick={() => setShowList(true)}
-                className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-onaccent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+      <main className="flex-1">
+        {/* Hero — faint amber glow + whisper of dot-grid for depth. */}
+        <section className="hero-glow bg-dotgrid relative overflow-hidden border-b border-line">
+          <div className="relative z-10 mx-auto grid max-w-6xl items-center gap-12 px-4 py-16 md:px-6 md:py-24 lg:grid-cols-[1.05fr_0.95fr]">
+            <div>
+              <span
+                className="animate-fade-up inline-flex items-center gap-2 rounded-full border border-line bg-panel/70 px-3 py-1.5 font-mono text-[11px] uppercase tracking-[0.16em] text-muted"
+                style={{ animationDelay: "0.05s" }}
               >
-                <Plus className="h-4 w-4" aria-hidden />
-                List a service
-              </button>
+                <span className="pulse-dot h-1.5 w-1.5 rounded-full bg-good" aria-hidden />
+                Agent payments on Canton
+              </span>
+              <h1
+                className="animate-fade-up mt-5 text-[clamp(2.5rem,6.5vw,4.25rem)] font-bold leading-[1.05] tracking-tight"
+                style={{ animationDelay: "0.12s" }}
+              >
+                The marketplace where AI agents{" "}
+                <span className="text-accent">hire and pay</span> each other.
+              </h1>
+              <p
+                className="animate-fade-up mt-5 max-w-xl text-lg leading-relaxed text-muted"
+                style={{ animationDelay: "0.22s" }}
+              >
+                Agents discover API and data services and pay per call in real
+                Canton assets —{" "}
+                <span className="font-medium text-text">CC, cBTC, cETH</span> —
+                settled on-ledger. Spending limits the ledger enforces, and
+                payments only the two parties can see. Private by default, unlike
+                public chains.
+              </p>
+              <div
+                className="animate-fade-up mt-8 flex flex-wrap items-center gap-3"
+                style={{ animationDelay: "0.32s" }}
+              >
+                <Link href="/app" className={`${primaryBtn} h-11`}>
+                  Launch marketplace
+                  <ArrowRight className="h-4 w-4" aria-hidden />
+                </Link>
+                <a href="#how" className={`${secondaryBtn} h-11`}>
+                  See how it works
+                </a>
+              </div>
+              <div
+                className="animate-fade-up mt-9 flex flex-wrap gap-2"
+                style={{ animationDelay: "0.42s" }}
+              >
+                <HeroPill icon={ShieldCheck}>Ledger-enforced budgets</HeroPill>
+                <HeroPill icon={Coins}>CC · cBTC · cETH</HeroPill>
+                <HeroPill icon={EyeOff}>Private by default</HeroPill>
+                <HeroPill icon={Zap}>Real on-ledger settlement</HeroPill>
+              </div>
             </div>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              {listings.map((l) => (
-                <ListingCard key={l.id} listing={l} />
-              ))}
-            </div>
-          </section>
 
-          <section aria-label="Live settlement activity" className="mt-10">
-            <SectionTitle>Live activity</SectionTitle>
-            <p className="mt-1 text-sm text-muted">
-              Every row is a real transaction on Canton devnet, verified on-ledger before the service was served.
+            {/* Signature visual: the 402 → 200 wire motif + a live-settlement ticker. */}
+            <div
+              className="animate-fade-up flex flex-col gap-4"
+              style={{ animationDelay: "0.5s" }}
+            >
+              <WireCard />
+              <LiveTicker />
+            </div>
+          </div>
+        </section>
+
+        {/* Two-sided flow */}
+        <section className="bg-dotgrid border-b border-line">
+          <div className="mx-auto max-w-6xl px-4 py-16 md:px-6 md:py-24">
+            <p className={eyebrow}>
+              <Network className="h-3.5 w-3.5" aria-hidden />
+              A two-sided marketplace
             </p>
-            <div className="mt-4">
-              {activity.length === 0 ? <EmptyActivity /> : <ActivityTable rows={activity} />}
+            <h2 className="mt-4 text-3xl font-bold tracking-tight md:text-4xl">
+              Providers list, agents hire.
+            </h2>
+            <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted">
+              One side lists paid endpoints; the other spends a budget the ledger
+              keeps honest. Four moves take a service from listing to payout.
+            </p>
+            <ol className="mt-12 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+              {FLOW.map((step, i) => (
+                <FlowStep key={step.n} {...step} last={i === FLOW.length - 1} />
+              ))}
+            </ol>
+          </div>
+        </section>
+
+        {/* What runs under every call — alternating feature rows with real mockups */}
+        <section id="how" className="scroll-mt-20 border-b border-line">
+          <div className="mx-auto max-w-6xl px-4 py-16 md:px-6 md:py-24">
+            <div className="max-w-2xl">
+              <p className={eyebrow}>
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+                What runs under every call
+              </p>
+              <h2 className="mt-4 text-3xl font-bold tracking-tight md:text-4xl">
+                Machine commerce, priced per call — and enforced by the ledger.
+              </h2>
+              <p className="mt-3 text-base leading-relaxed text-muted">
+                Four properties public chains can&apos;t give agents. Here&apos;s
+                what each one looks like in the product.
+              </p>
             </div>
-          </section>
-        </>
-      )}
 
-      {showList && (
-        <ListServiceModal
-          gateway={GATEWAY}
-          defaultProvider={walletParty ?? ""}
-          onClose={() => setShowList(false)}
-          onListed={() => {
-            setShowList(false);
-            load();
-          }}
-        />
-      )}
-    </main>
-  );
-}
+            <div className="mt-14 space-y-16 md:mt-20 md:space-y-24">
+              <FeatureRow
+                eyebrow="Settle"
+                icon={Coins}
+                title="Every call is a real payment."
+                body="No invoices, no monthly bills. An agent discovers a service, and each call settles a token transfer to the provider on Canton — one real ledger state change per call. The transfer is the receipt."
+                mock={<ListingMock />}
+              />
+              <FeatureRow
+                eyebrow="Enforce"
+                icon={ShieldCheck}
+                title="The ledger stops overspending."
+                body="An agent's budget is a Canton mandate, not a setting the app can wave through. Every call is authorized on-ledger against the cap first; when the budget is spent, the network itself refuses the next call — no charge, no exception."
+                mock={<MandateMock />}
+                reverse
+              />
+              <FeatureRow
+                eyebrow="Privacy"
+                icon={EyeOff}
+                title="Payments only two parties can see."
+                body="Canton's sub-transaction privacy keeps each settlement visible to the payer and the provider — and no one else. There's no public payment graph to scrape: an outsider on the same network sees nothing."
+                mock={<PrivacyMock />}
+              />
+              <FeatureRow
+                eyebrow="Assets"
+                icon={Boxes}
+                title="Settle in CC, cBTC, or cETH."
+                body="Price a service in Canton Coin or in wrapped BTC and ETH, and agents pay in the same asset. Each is a real two-party token transfer the gateway verifies on-ledger before the call is served."
+                mock={<AssetsMock />}
+                reverse
+              />
+            </div>
 
-function Header({
-  live,
-  lastFetch,
-  walletParty,
-  connecting,
-  walletError,
-  onConnect,
-  onDisconnect,
-}: {
-  live: boolean;
-  lastFetch: Date | null;
-  walletParty: string | null;
-  connecting: boolean;
-  walletError: string | null;
-  onConnect: () => void;
-  onDisconnect: () => void;
-}) {
-  return (
-    <header className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex flex-col gap-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img src="/logo.png" alt="Vanton" className="h-12 w-auto md:h-14" />
-        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">
-          Agent payments on Canton
-        </p>
-        <h1 className="sr-only">Vanton</h1>
-      </div>
-      <div className="flex flex-col items-end gap-2">
-        <div className="flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5">
-          <span
-            className={`pulse-dot h-2 w-2 rounded-full ${live ? "bg-good" : "bg-muted"}`}
-            aria-hidden
-          />
-          <span className="font-mono text-xs text-muted">
-            {live
-              ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}`
-              : "connecting…"}
-          </span>
+            <div className="mt-16 flex flex-wrap items-center gap-x-6 gap-y-2 border-t border-line pt-8 text-sm text-muted">
+              <span className="text-muted/70">Also:</span>
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-1 rounded transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+              >
+                Run the demo agent
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+              <Link
+                href="/app"
+                className="inline-flex items-center gap-1 rounded transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+              >
+                List a service
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </Link>
+              <a
+                href={REPO}
+                target="_blank"
+                rel="noreferrer"
+                className="inline-flex items-center gap-1 rounded transition-colors hover:text-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+              >
+                Read the source
+                <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+              </a>
+            </div>
+          </div>
+        </section>
+
+      </main>
+
+      <footer className="border-t border-line">
+        <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-4 px-4 py-8 md:flex-row md:px-6">
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img src="/logo-clean.png" alt="Vanton" className="h-7 w-auto" />
+          <div className="flex flex-wrap items-center justify-center gap-x-6 gap-y-2 text-sm text-muted">
+            <a
+              href="#how"
+              className="rounded transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              How it works
+            </a>
+            <a
+              href={REPO}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              GitHub
+              <ArrowUpRight className="h-3.5 w-3.5" aria-hidden />
+            </a>
+            <span className="text-xs">HackCanton Season 2</span>
+          </div>
         </div>
-        {walletParty ? (
-          <button
-            onClick={onDisconnect}
-            title={walletParty}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-good/40 bg-good/10 px-3 text-sm font-medium text-good focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-good focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
-          >
-            <span className="h-2 w-2 rounded-full bg-good" aria-hidden />
-            <span className="font-mono text-xs">{shortParty(walletParty)}</span>
-            <span className="text-muted">·</span>
-            <span className="text-xs">Disconnect</span>
-          </button>
-        ) : (
-          <button
-            onClick={onConnect}
-            disabled={connecting}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-panel px-4 text-sm font-medium text-text hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
-          >
-            <Wallet className="h-4 w-4" aria-hidden />
-            {connecting ? "Connecting…" : "Connect wallet"}
-          </button>
-        )}
-        {walletError && <p className="max-w-56 text-right text-xs text-bad">{walletError}</p>}
-      </div>
-    </header>
+      </footer>
+    </div>
   );
 }
 
-function SectionTitle({ children }: { children: React.ReactNode }) {
-  return <h2 className="text-lg font-bold tracking-tight">{children}</h2>;
-}
-
-function Stat({
+function HeroPill({
   icon: Icon,
-  label,
-  value,
-  accent = false,
+  children,
 }: {
-  icon: typeof Zap;
-  label: string;
-  value: string;
-  accent?: boolean;
+  icon: typeof Lock;
+  children: React.ReactNode;
 }) {
   return (
-    <div className="rounded-lg border border-line bg-panel p-4">
-      <div className="flex items-center gap-2 text-muted">
-        <Icon className="h-4 w-4" aria-hidden />
-        <span className="font-mono text-[11px] uppercase tracking-[0.12em]">{label}</span>
+    <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-panel/60 px-3 py-1.5 text-xs font-medium text-muted">
+      <Icon className="h-3.5 w-3.5 text-accent" aria-hidden />
+      {children}
+    </span>
+  );
+}
+
+/* ---- Hero signature: the 402 → 200 wire motif (amber 402, teal 200). ---- */
+function WireCard() {
+  return (
+    <div className="rounded-xl border border-line bg-panel p-5 font-mono text-sm md:p-6">
+      <div className="flex items-center justify-between border-b border-line pb-3">
+        <span className="text-[11px] uppercase tracking-[0.14em] text-muted">
+          402 settlement · live path
+        </span>
+        <span className="pulse-dot h-2 w-2 rounded-full bg-good" aria-hidden />
       </div>
-      <p
-        className={`mt-2 font-mono text-2xl font-semibold tabular-nums ${accent ? "text-accent" : "text-text"}`}
-      >
-        {value}
+      <div className="mt-4 space-y-2.5 text-muted">
+        <WireLine actor="agent">
+          GET <span className="text-text">/btc-price</span>
+        </WireLine>
+        <WireLine actor="gateway">
+          <span className="text-accent">402 Payment Required</span>
+        </WireLine>
+        <WireLine actor="agent">
+          pays <span className="text-text">0.01 CC</span> on Canton
+        </WireLine>
+        <WireLine actor="ledger">
+          checks mandate · <span className="text-good">authorized</span>
+        </WireLine>
+        <WireLine actor="gateway">
+          <span className="text-good">200 OK</span> + data
+        </WireLine>
+      </div>
+      <p className="mt-4 border-t border-line pt-3 text-[11px] leading-relaxed text-muted">
+        One real transaction on Canton per paid call — verified on-ledger before
+        the service is served.
       </p>
     </div>
   );
 }
 
-function BalanceItem({ label, value }: { label: string; value: string }) {
+function WireLine({
+  actor,
+  children,
+}: {
+  actor: string;
+  children: React.ReactNode;
+}) {
   return (
-    <span className="inline-flex items-baseline gap-1.5">
-      <span className="font-mono text-lg font-semibold tabular-nums text-text">{value}</span>
-      <span className="font-mono text-xs text-accent">{label}</span>
-    </span>
-  );
-}
-
-function LimitInput({ label, value, onChange }: { label: string; value: string; onChange: (v: string) => void }) {
-  return (
-    <span className="inline-flex items-center gap-1">
-      <input
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        inputMode="decimal"
-        aria-label={`${label} limit`}
-        className="h-8 w-16 rounded-md border border-line bg-panel2 px-2 font-mono text-xs tabular-nums text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-      />
-      <span className="font-mono text-[11px] text-accent">{label}</span>
-    </span>
-  );
-}
-
-function ListingCard({ listing }: { listing: Listing }) {
-  return (
-    <article className="flex flex-col gap-3 rounded-lg border border-line bg-panel p-5">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <h3 className="font-semibold">{listing.name}</h3>
-          <p className="mt-1 text-sm text-muted">{listing.description || "—"}</p>
-        </div>
-        <span className="shrink-0 rounded-full border border-line bg-panel2 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
-          {listing.category}
-        </span>
-      </div>
-      <div className="mt-auto flex items-center justify-between border-t border-line pt-3">
-        <span className="font-mono text-sm tabular-nums">
-          <span className="font-semibold text-accent">{listing.priceAmount}</span>{" "}
-          <span className="text-muted">{listing.priceAsset} / call</span>
-        </span>
-        <span className="font-mono text-xs text-muted" title={listing.provider}>
-          {shortParty(listing.provider)}
-        </span>
-      </div>
-    </article>
-  );
-}
-
-function ActivityTable({ rows }: { rows: Settled[] }) {
-  return (
-    <div className="overflow-x-auto rounded-lg border border-line">
-      <table className="w-full min-w-160 border-collapse text-sm">
-        <thead>
-          <tr className="border-b border-line bg-panel2 text-left">
-            {["Settled", "Service", "Amount", "Payer", "On-ledger event"].map((h) => (
-              <th
-                key={h}
-                className="px-4 py-2.5 font-mono text-[11px] font-semibold uppercase tracking-[0.12em] text-muted"
-              >
-                {h}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r) => (
-            <tr key={r.reference} className="border-b border-line bg-panel last:border-b-0">
-              <td className="px-4 py-3 font-mono text-xs tabular-nums text-muted">
-                {timeAgo(r.settledAt)}
-              </td>
-              <td className="px-4 py-3 font-medium">{r.service}</td>
-              <td className="px-4 py-3 font-mono tabular-nums">
-                <span className="text-good">{r.price}</span> <span className="text-muted">{r.asset ?? "CC"}</span>
-              </td>
-              <td className="px-4 py-3 font-mono text-xs text-muted" title={r.sender}>
-                {shortParty(r.sender)}
-              </td>
-              <td className="px-4 py-3 font-mono text-xs text-muted" title={r.eventId || "settled on-ledger"}>
-                {r.eventId ? shortEvent(r.eventId) : "settled"}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="flex items-baseline gap-2">
+      <span className="w-16 shrink-0 text-text">{actor}</span>
+      <span aria-hidden className="text-muted">
+        →
+      </span>
+      <span>{children}</span>
     </div>
   );
 }
 
-function EmptyActivity() {
+function LiveTicker() {
   return (
-    <div className="flex flex-col items-center gap-3 rounded-lg border border-line bg-panel py-12 text-center">
-      <Activity className="h-8 w-8 text-muted" aria-hidden />
+    <div className="rounded-xl border border-line bg-panel p-4">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+          Recent settlements
+        </span>
+        <span className="pulse-dot h-2 w-2 rounded-full bg-good" aria-hidden />
+      </div>
+      <div className="mt-3 space-y-2 font-mono text-xs tabular-nums">
+        <TickRow service="BTC spot price" amount="0.01" asset="CC" />
+        <TickRow service="ETH momentum signal" amount="0.002" asset="cETH" />
+      </div>
+    </div>
+  );
+}
+
+function TickRow({
+  service,
+  amount,
+  asset,
+}: {
+  service: string;
+  amount: string;
+  asset: string;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3 rounded-md border border-line bg-panel2 px-2.5 py-1.5">
+      <span className="truncate text-muted">{service}</span>
+      <span className="shrink-0">
+        <span className="text-good">{amount}</span>{" "}
+        <span className="text-muted">{asset}</span>
+      </span>
+    </div>
+  );
+}
+
+/* ---- Alternating feature row: copy on one side, product mockup on the other ---- */
+function FeatureRow({
+  eyebrow: eyebrowText,
+  icon: Icon,
+  title,
+  body,
+  mock,
+  reverse = false,
+}: {
+  eyebrow: string;
+  icon: typeof Lock;
+  title: string;
+  body: string;
+  mock: React.ReactNode;
+  reverse?: boolean;
+}) {
+  return (
+    <div className="grid items-center gap-10 lg:grid-cols-2 lg:gap-16">
+      <div className={reverse ? "lg:order-2" : undefined}>
+        <p className={eyebrow}>
+          <Icon className="h-3.5 w-3.5" aria-hidden />
+          {eyebrowText}
+        </p>
+        <h3 className="mt-4 text-2xl font-bold tracking-tight md:text-[2rem] md:leading-[1.15]">
+          {title}
+        </h3>
+        <p className="mt-4 max-w-md text-base leading-relaxed text-muted">
+          {body}
+        </p>
+      </div>
+      <div
+        className={`flex justify-center lg:justify-end ${
+          reverse ? "lg:order-1 lg:justify-start" : ""
+        }`}
+      >
+        <div className="relative w-full max-w-sm">
+          {/* Soft amber light behind the mock (subtle depth, not a fill). */}
+          <div
+            aria-hidden
+            className="absolute -inset-5 -z-10 rounded-4xl bg-accent/5 blur-2xl"
+          />
+          {mock}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ---- Product mockups (static replicas of the real dashboard surfaces) ---- */
+
+function ListingMock() {
+  return (
+    <div className="rounded-xl border border-line bg-panel p-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h4 className="font-semibold">BTC Spot Price</h4>
+          <p className="mt-1 text-sm text-muted">
+            Live BTC/USD, refreshed on every call.
+          </p>
+        </div>
+        <span className="shrink-0 rounded-full border border-line bg-panel2 px-2.5 py-1 font-mono text-[11px] uppercase tracking-[0.08em] text-muted">
+          analytics
+        </span>
+      </div>
+      <div className="mt-4 flex items-center justify-between border-t border-line pt-3 font-mono text-sm tabular-nums">
+        <span>
+          <span className="font-semibold text-accent">0.01</span>{" "}
+          <span className="text-muted">CC / call</span>
+        </span>
+        <span className="text-xs text-muted">provider::1220…a4f</span>
+      </div>
+      <div className="mt-3 flex items-center gap-2 rounded-lg border border-good/25 bg-good/5 px-3 py-2 text-xs">
+        <Check className="h-3.5 w-3.5 shrink-0 text-good" aria-hidden />
+        <span className="text-muted">
+          agent paid{" "}
+          <span className="font-mono tabular-nums text-good">0.01 CC</span> ·
+          settled on Canton
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function MandateMock() {
+  return (
+    <div className="rounded-xl border border-line bg-panel p-5">
+      <div className="flex items-center justify-between">
+        <span className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+          Agent budget · on-ledger
+        </span>
+        <span className="inline-flex items-center gap-1 rounded-full bg-accent/10 px-2 py-0.5 font-mono text-[11px] text-accent">
+          <Lock className="h-3 w-3" aria-hidden /> mandate
+        </span>
+      </div>
+      <div className="mt-3 flex items-baseline gap-4 font-mono tabular-nums">
+        <span className="text-2xl font-semibold text-text">
+          0.02 <span className="text-sm text-accent">CC</span>
+        </span>
+        <span className="text-xs text-muted">cap 0.01 / call</span>
+      </div>
+      <div className="mt-4 space-y-1.5 font-mono text-xs">
+        <MockCall label="call 1" amount="0.01 CC" />
+        <MockCall label="call 2" amount="0.01 CC" />
+        <MockCall label="call 3" rejected />
+      </div>
+    </div>
+  );
+}
+
+function MockCall({
+  label,
+  amount,
+  rejected = false,
+}: {
+  label: string;
+  amount?: string;
+  rejected?: boolean;
+}) {
+  return (
+    <div
+      className={`flex items-center justify-between rounded-md border px-2.5 py-1.5 ${
+        rejected ? "border-bad/30 bg-bad/5" : "border-line bg-panel2"
+      }`}
+    >
+      <span className="text-muted">{label}</span>
+      {rejected ? (
+        <span className="inline-flex items-center gap-1 text-bad">
+          <X className="h-3 w-3" aria-hidden /> rejected · budget spent
+        </span>
+      ) : (
+        <span className="inline-flex items-center gap-1.5">
+          <span className="tabular-nums text-text">{amount}</span>
+          <Check className="h-3 w-3 text-good" aria-hidden />
+        </span>
+      )}
+    </div>
+  );
+}
+
+function PrivacyMock() {
+  return (
+    <div className="space-y-3 rounded-xl border border-line bg-panel p-5">
       <div>
-        <p className="text-sm font-medium">No settlements yet</p>
-        <p className="mt-1 text-sm text-muted">
-          Run the demo agent to watch payments land here:{" "}
-          <span className="font-mono text-xs">cd agent &amp;&amp; npm start</span>
+        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+          You &amp; the provider see
+        </p>
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-line bg-panel2 px-3 py-2.5 font-mono text-xs tabular-nums">
+          <span className="text-muted">ETH signal · 12s ago</span>
+          <span>
+            <span className="text-good">0.002</span>{" "}
+            <span className="text-muted">cETH</span>
+          </span>
+        </div>
+      </div>
+      <div>
+        <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+          An outsider sees
+        </p>
+        <div className="mt-2 flex items-center justify-between gap-3 rounded-lg border border-line bg-panel2 px-3 py-2.5 font-mono text-xs tabular-nums">
+          <span className="encrypted-blur text-muted" aria-hidden>
+            ETH signal · 12s ago
+          </span>
+          <span className="encrypted-blur" aria-hidden>
+            <span className="text-good">0.002</span>{" "}
+            <span className="text-muted">cETH</span>
+          </span>
+        </div>
+        <p className="mt-2 inline-flex items-center gap-1.5 text-[11px] text-muted">
+          <EyeOff className="h-3 w-3" aria-hidden /> no records · nothing to
+          scrape
         </p>
       </div>
     </div>
   );
 }
 
-function ListServiceModal({
-  gateway,
-  defaultProvider,
-  onClose,
-  onListed,
-}: {
-  gateway: string;
-  defaultProvider: string;
-  onClose: () => void;
-  onListed: () => void;
-}) {
-  const [form, setForm] = useState({
-    name: "",
-    provider: defaultProvider,
-    priceAmount: "",
-    priceAsset: "CC",
-    category: "",
-    targetUrl: "",
-    description: "",
-  });
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  // Close on Escape.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
-
-  const set = (k: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>) =>
-    setForm((f) => ({ ...f, [k]: e.target.value }));
-
-  const submit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setSubmitting(true);
-    setError(null);
-    try {
-      const res = await fetch(`${gateway}/listings`, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(form),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Request failed (${res.status})`);
-      }
-      onListed();
-    } catch (err) {
-      setError((err as Error).message);
-      setSubmitting(false);
-    }
-  };
-
+function AssetsMock() {
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="list-title"
-      onClick={onClose}
-    >
-      <div
-        className="w-full max-w-md rounded-lg border border-line bg-panel p-6 shadow-xl"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div className="flex items-start justify-between">
-          <div>
-            <h2 id="list-title" className="text-lg font-bold tracking-tight">
-              List a service
-            </h2>
-            <p className="mt-1 text-sm text-muted">
-              Register an API agents can pay for, per call, on Canton.
-            </p>
-          </div>
-          <button
-            onClick={onClose}
-            aria-label="Close"
-            className="rounded-md p-2 text-muted hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
-          >
-            <X className="h-5 w-5" aria-hidden />
-          </button>
-        </div>
-
-        <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
-          <Field label="Service name" htmlFor="name">
-            <input
-              id="name"
-              required
-              value={form.name}
-              onChange={set("name")}
-              placeholder="Canton Stats API"
-              className={inputCls}
-            />
-          </Field>
-
-          <Field
-            label="Your Canton party ID"
-            htmlFor="provider"
-            hint="Connect your wallet above to fill this, or paste it — you receive payments here."
-          >
-            <input
-              id="provider"
-              required
-              value={form.provider}
-              onChange={set("provider")}
-              placeholder="yourname::1220…"
-              autoComplete="off"
-              className={`${inputCls} font-mono text-xs`}
-            />
-          </Field>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Price / call" htmlFor="price">
-              <input
-                id="price"
-                required
-                inputMode="decimal"
-                value={form.priceAmount}
-                onChange={set("priceAmount")}
-                placeholder="0.01"
-                className={`${inputCls} font-mono tabular-nums`}
-              />
-            </Field>
-            <Field label="Asset" htmlFor="asset">
-              <select id="asset" value={form.priceAsset} onChange={set("priceAsset")} className={inputCls}>
-                <option value="CC">CC</option>
-                <option value="cBTC">cBTC</option>
-                <option value="cETH">cETH</option>
-              </select>
-            </Field>
-          </div>
-
-          <Field label="Category" htmlFor="category">
-            <input
-              id="category"
-              value={form.category}
-              onChange={set("category")}
-              placeholder="analytics"
-              className={inputCls}
-            />
-          </Field>
-
-          <Field label="Description" htmlFor="description" hint="What does this service do? Shown on the listing card and read by agents.">
-            <textarea
-              id="description"
-              value={form.description}
-              onChange={set("description")}
-              placeholder="Live weather for any city, refreshed hourly."
-              rows={2}
-              className={`${inputCls} h-auto resize-none py-2`}
-            />
-          </Field>
-
-          <Field
-            label="Your API URL"
-            htmlFor="targetUrl"
-            hint="The gateway calls this after an agent pays. Try the demo one below to test."
-          >
-            <input
-              id="targetUrl"
-              required
-              value={form.targetUrl}
-              onChange={set("targetUrl")}
-              placeholder="http://localhost:3402/free-sample"
-              className={`${inputCls} font-mono text-xs`}
-            />
-          </Field>
-
-          {error && (
-            <p className="rounded-md border border-bad/30 bg-bad/5 px-3 py-2 text-sm text-bad">
-              {error}
-            </p>
-          )}
-
-          <button
-            type="submit"
-            disabled={submitting}
-            className="mt-1 inline-flex h-11 items-center justify-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-onaccent disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-panel"
-          >
-            {submitting ? "Listing…" : "List service"}
-          </button>
-        </form>
+    <div className="rounded-xl border border-line bg-panel p-5">
+      <p className="font-mono text-[11px] uppercase tracking-[0.14em] text-muted">
+        Agent wallet
+      </p>
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <AssetChip label="CC" value="128.40" />
+        <AssetChip label="cBTC" value="0.0140" />
+        <AssetChip label="cETH" value="0.220" />
+      </div>
+      <div className="mt-4 flex items-center gap-2 rounded-lg border border-good/25 bg-good/5 px-3 py-2 text-xs">
+        <Check className="h-3.5 w-3.5 shrink-0 text-good" aria-hidden />
+        <span className="text-muted">
+          paid{" "}
+          <span className="font-mono tabular-nums text-good">0.0004 cBTC</span> ·
+          verified on-ledger
+        </span>
       </div>
     </div>
   );
 }
 
-const inputCls =
-  "h-10 w-full rounded-md border border-line bg-panel2 px-3 text-sm text-text placeholder:text-muted/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent";
-
-function Field({
-  label,
-  htmlFor,
-  hint,
-  children,
-}: {
-  label: string;
-  htmlFor: string;
-  hint?: string;
-  children: React.ReactNode;
-}) {
+function AssetChip({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex flex-col gap-1.5">
-      <label htmlFor={htmlFor} className="text-sm font-medium">
-        {label}
-      </label>
-      {children}
-      {hint && <p className="text-xs text-muted">{hint}</p>}
+    <div className="rounded-lg border border-line bg-panel2 px-3 py-2 text-center">
+      <div className="font-mono text-sm font-semibold tabular-nums text-text">
+        {value}
+      </div>
+      <div className="font-mono text-[11px] text-accent">{label}</div>
     </div>
   );
 }
 
-function PageSkeleton() {
+function FlowStep({
+  n,
+  icon: Icon,
+  title,
+  body,
+  last = false,
+}: {
+  n: string;
+  icon: typeof Lock;
+  title: string;
+  body: string;
+  last?: boolean;
+}) {
   return (
-    <div className="mt-8 space-y-10" aria-hidden>
-      <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {Array.from({ length: 4 }).map((_, i) => (
-          <div key={i} className="h-24 rounded-lg bg-panel motion-safe:animate-pulse" />
-        ))}
+    <li className="relative flex flex-col gap-6 rounded-xl border border-line bg-panel p-6">
+      <div className="flex items-center justify-between">
+        <span className="inline-flex h-12 w-12 items-center justify-center rounded-xl border border-line bg-panel2 text-accent">
+          <Icon className="h-5 w-5" aria-hidden />
+        </span>
+        <span className="font-mono text-sm font-medium tracking-[0.2em] text-muted/70">
+          {n}
+        </span>
       </div>
-      <div className="grid gap-3 md:grid-cols-2">
-        {Array.from({ length: 2 }).map((_, i) => (
-          <div key={i} className="h-36 rounded-lg bg-panel motion-safe:animate-pulse" />
-        ))}
+      <div>
+        <h3 className="text-lg font-semibold tracking-tight">{title}</h3>
+        <p className="mt-2 text-sm leading-relaxed text-muted">{body}</p>
       </div>
-      <div className="h-64 rounded-lg bg-panel motion-safe:animate-pulse" />
-    </div>
+      {!last && (
+        <span
+          aria-hidden
+          className="absolute top-1/2 -right-5 z-10 hidden -translate-y-1/2 lg:block"
+        >
+          <span className="grid h-7 w-7 place-items-center rounded-full border border-line bg-panel2 text-muted">
+            <ArrowRight className="h-3.5 w-3.5" />
+          </span>
+        </span>
+      )}
+    </li>
   );
 }

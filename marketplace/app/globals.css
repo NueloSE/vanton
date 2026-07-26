@@ -24,6 +24,55 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Amber text selection + a restrained, cool-tinted scrollbar (workstation feel). */
+::selection {
+  background: rgba(255, 176, 32, 0.22);
+  color: #fff;
+}
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(233, 237, 245, 0.14) transparent;
+}
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(233, 237, 245, 0.12);
+  border-radius: 9999px;
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(233, 237, 245, 0.2);
+  background-clip: content-box;
+}
+
+/* Signature surfaces (landing).
+   A faint amber ambient glow + a whisper of dot-grid texture — depth without a
+   flat pure-black. Deliberately very low alpha to keep the calm, institutional
+   read (see brand.md; these are the one place we lean on soft gradient light). */
+.hero-glow::before {
+  content: "";
+  position: absolute;
+  inset: -30% 0 auto 0;
+  height: 460px;
+  z-index: 0;
+  background: radial-gradient(50% 60% at 50% 0%, rgba(255, 176, 32, 0.1), transparent 70%);
+  pointer-events: none;
+}
+.bg-dotgrid {
+  background-image: radial-gradient(rgba(233, 237, 245, 0.045) 1px, transparent 1px);
+  background-size: 22px 22px;
+}
+
+/* Private value — blurred + unselectable, the way an outsider "sees" a payment. */
+.encrypted-blur {
+  filter: blur(6px);
+  user-select: none;
+  pointer-events: none;
+}
+
 /* Live-dot pulse — decorative, so disabled under reduced motion. */
 @media (prefers-reduced-motion: no-preference) {
   .pulse-dot {
@@ -36,6 +85,25 @@ body {
     }
     50% {
       opacity: 0.35;
+    }
+  }
+
+  /* Entrance: rise + de-blur into place. The hidden start state lives ONLY inside
+     the animation (fill-mode: both holds it through animation-delay), so with
+     reduced motion the element is simply visible — never stuck at opacity 0. */
+  .animate-fade-up {
+    animation: fade-up 0.6s cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(16px);
+      filter: blur(4px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      filter: blur(0);
     }
   }
 }
