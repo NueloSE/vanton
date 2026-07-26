@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Activity, Plus, RefreshCw, Server, Wallet, X, Zap } from "lucide-react";
+import { SiteFooter } from "../_components/site-footer";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3402";
 const POLL_MS = 5000;
@@ -197,7 +198,7 @@ export default function Home() {
   ].filter(Boolean);
 
   return (
-    <main className="mx-auto max-w-6xl px-4 py-8 md:px-6 md:py-12">
+    <div className="flex min-h-dvh flex-col">
       <Header
         live={phase === "ready"}
         lastFetch={lastFetch}
@@ -208,7 +209,8 @@ export default function Home() {
         onDisconnect={disconnectWallet}
       />
 
-      {phase === "loading" && <PageSkeleton />}
+      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-8 md:px-6 md:py-12">
+        {phase === "loading" && <PageSkeleton />}
 
       {phase === "error" && (
         <div className="mt-10 flex flex-col items-start gap-3 rounded-lg border border-bad/30 bg-bad/5 p-5">
@@ -362,6 +364,9 @@ export default function Home() {
           </section>
         </>
       )}
+      </main>
+
+      <SiteFooter />
 
       {showList && (
         <ListServiceModal
@@ -374,7 +379,7 @@ export default function Home() {
           }}
         />
       )}
-    </main>
+    </div>
   );
 }
 
@@ -396,59 +401,60 @@ function Header({
   onDisconnect: () => void;
 }) {
   return (
-    <header className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex flex-col gap-2">
+    <header className="border-b border-line">
+      <h1 className="sr-only">Vanton</h1>
+      <div className="flex items-center justify-between gap-4 px-5 py-4 md:px-8 lg:px-10">
         <Link
           href="/"
           aria-label="Vanton home"
-          className="inline-flex w-fit rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+          className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
         >
           {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img src="/logo-clean.png" alt="Vanton" className="h-12 w-auto md:h-14" />
+          <img src="/logo-clean.png" alt="Vanton" className="h-11 w-auto md:h-12" />
         </Link>
-        <p className="font-mono text-[11px] uppercase tracking-[0.16em] text-accent">
-          Agent payments on Canton
-        </p>
-        <h1 className="sr-only">Vanton</h1>
-      </div>
-      <div className="flex flex-col items-end gap-2">
-        <div className="flex items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5">
-          <span
-            className={`pulse-dot h-2 w-2 rounded-full ${live ? "bg-good" : "bg-muted"}`}
-            aria-hidden
-          />
-          <span className="font-mono text-xs text-muted">
-            {live
-              ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}`
-              : "connecting…"}
-          </span>
+        <div className="flex items-center gap-2 sm:gap-3">
+          <div className="hidden items-center gap-2 rounded-full border border-line bg-panel px-3 py-1.5 sm:flex">
+            <span
+              className={`pulse-dot h-2 w-2 rounded-full ${live ? "bg-good" : "bg-muted"}`}
+              aria-hidden
+            />
+            <span className="font-mono text-xs text-muted">
+              {live
+                ? `devnet · updated ${lastFetch ? timeAgo(lastFetch.toISOString()) : "now"}`
+                : "connecting…"}
+            </span>
+          </div>
+          {walletParty ? (
+            <button
+              type="button"
+              onClick={onDisconnect}
+              title={walletParty}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-good/40 bg-good/10 px-3 text-sm font-medium text-good transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-good focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              <span className="h-2 w-2 rounded-full bg-good" aria-hidden />
+              <span className="font-mono text-xs">{shortParty(walletParty)}</span>
+              <span className="text-muted">·</span>
+              <span className="text-xs">Disconnect</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onConnect}
+              disabled={connecting}
+              aria-busy={connecting}
+              className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-panel px-4 text-sm font-medium text-text transition-colors hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              <Wallet className="h-4 w-4" aria-hidden />
+              {connecting ? "Connecting…" : "Connect wallet"}
+            </button>
+          )}
         </div>
-        {walletParty ? (
-          <button
-            type="button"
-            onClick={onDisconnect}
-            title={walletParty}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-good/40 bg-good/10 px-3 text-sm font-medium text-good transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-good focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
-          >
-            <span className="h-2 w-2 rounded-full bg-good" aria-hidden />
-            <span className="font-mono text-xs">{shortParty(walletParty)}</span>
-            <span className="text-muted">·</span>
-            <span className="text-xs">Disconnect</span>
-          </button>
-        ) : (
-          <button
-            type="button"
-            onClick={onConnect}
-            disabled={connecting}
-            aria-busy={connecting}
-            className="inline-flex h-10 items-center gap-2 rounded-md border border-line bg-panel px-4 text-sm font-medium text-text transition-colors hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
-          >
-            <Wallet className="h-4 w-4" aria-hidden />
-            {connecting ? "Connecting…" : "Connect wallet"}
-          </button>
-        )}
-        {walletError && <p className="max-w-56 text-right text-xs text-bad">{walletError}</p>}
       </div>
+      {walletError && (
+        <div className="border-t border-line px-5 py-2.5 md:px-8 lg:px-10">
+          <p className="text-xs text-bad">{walletError}</p>
+        </div>
+      )}
     </header>
   );
 }
