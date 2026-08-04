@@ -75,17 +75,80 @@ async function currentMandate(
   });
   const acs = (await acsRes.json()) as any[];
   // An agent may have several AgentMandate contracts (re-runs, prior periods).
-  // Use the one with the most budget left — the usable one.
+  // Use the one with the most budget left — the usable one. Restrict to the
+  // configured package so a leftover mandate from an older DAR isn't picked
+  // (exercising the new choice on an old-package contract would fail).
   let best: { cid: string; budgetRemaining: string; n: number } | null = null;
   for (const c of acs) {
     const ce = c?.contractEntry?.JsActiveContract?.createdEvent;
-    if (ce?.templateId?.endsWith(":AgentMandate") && ce.createArgument?.asset === asset) {
+    if (
+      ce?.templateId?.endsWith(":AgentMandate") &&
+      ce.templateId.startsWith(cfg.packageId) &&
+      ce.createArgument?.asset === asset
+    ) {
       const remaining = ce.createArgument?.budgetRemaining ?? "0";
       const n = Number(remaining);
       if (!best || n > best.n) best = { cid: ce.contractId, budgetRemaining: remaining, n };
     }
   }
   return best ? { cid: best.cid, budgetRemaining: best.budgetRemaining } : null;
+}
+
+/** Read-only budget check: does the agent's mandate have room for `amount`?
+ *  Used at the 402 challenge to refuse an over-budget call BEFORE any payment
+ *  (the demo's money shot), reading the real on-ledger budget. No state change. */
+export async function checkBudget(cfg: MandateCheckConfig, asset: string, amount: string): Promise<AuthorizeResult> {
+  const mandate = await currentMandate(cfg, asset);
+  if (!mandate) return { ok: false, reason: `no active ${asset} mandate for agent` };
+  if (Number(mandate.budgetRemaining) + 1e-12 < Number(amount)) {
+    return { ok: false, reason: "budget exhausted", remaining: mandate.budgetRemaining };
+  }
+  return { ok: true, remaining: mandate.budgetRemaining };
+}
+
+/**
+ * Atomic charge: exercise `Mandate_Charge` after the gateway has verified the
+ * payment settled. In ONE ledger transaction the choice re-asserts the budget,
+ * decrements it, and mints a Receipt bound to `settlementRef` (the settled
+ * payment's on-ledger id). So authorization and receipt are atomic, and no call
+ * is served without a matching on-ledger receipt. Enforcement is the ledger's,
+ * not ours: an over-budget/expired charge fails the whole transaction.
+ */
+export async function chargeSpend(
+  cfg: MandateCheckConfig,
+  provider: string,
+  serviceName: string,
+  amount: string,
+  asset: string,
+  settlementRef: string,
+): Promise<AuthorizeResult> {
+  const mandate = await currentMandate(cfg, asset);
+  if (!mandate) return { ok: false, reason: `no active ${asset} mandate for agent` };
+
+  const res = await post(cfg, "/v2/commands/submit-and-wait-for-transaction", {
+    commands: {
+      userId: await commandUserId(cfg),
+      commands: [
+        {
+          ExerciseCommand: {
+            templateId: `${cfg.packageId}:${MODULE}:AgentMandate`,
+            contractId: mandate.cid,
+            choice: "Mandate_Charge",
+            choiceArgument: { provider, serviceName, amount, settlementRef },
+          },
+        },
+      ],
+      commandId: `vanton-charge-${Date.now()}`,
+      actAs: [cfg.agentParty],
+      readAs: [],
+    },
+  });
+
+  if (res.ok) {
+    const after = await currentMandate(cfg, asset);
+    return { ok: true, remaining: after?.budgetRemaining };
+  }
+  return { ok: false, reason: summarizeRejection(await res.text()), remaining: mandate.budgetRemaining };
 }
 
 /**

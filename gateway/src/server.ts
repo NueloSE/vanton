@@ -18,7 +18,7 @@ import "dotenv/config";
 import { spawn } from "node:child_process";
 import path from "node:path";
 import express, { type Request, type Response, type NextFunction } from "express";
-import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
+import { authorizeSpend, checkBudget, chargeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 import { issueTokenCharge, verifyTokenCharge, tokenActivity } from "./token-verify.js";
 import { cantonStats, ccBalance } from "./canton-data.js";
@@ -30,6 +30,10 @@ import { getAccessToken } from "./auth.js";
 const PORT = Number(process.env.PORT ?? 3402);
 const PAY_MODE = process.env.PAY_MODE ?? "devnet";
 const PRICE_CC = process.env.PRICE_CC ?? "0.01";
+// When true: refuse over-budget at the 402 (read-only), then after the payment
+// settles, atomically decrement + mint an on-ledger Receipt via Mandate_Charge.
+// When false (legacy): Mandate_Authorize decrements at challenge time.
+const CHARGE_MODE = process.env.MANDATE_CHARGE === "true";
 
 function requireEnv(name: string): string {
   const v = process.env[name];
@@ -152,15 +156,42 @@ const mandateCfg: MandateCheckConfig | null = mandateEnabled
  *  no mandate configured); otherwise responds 403 and returns false. */
 async function enforceMandate(res: Response, asset: string, service: string, price: string): Promise<boolean> {
   if (!mandateCfg) return true;
-  const auth = await serialize(`${mandateCfg.agentParty}:${asset}`, () =>
-    authorizeSpend(mandateCfg!, service, price, asset),
+  // Challenge-time gate. Charge mode: read-only budget pre-check (refuse before
+  // any payment). Legacy: Mandate_Authorize (decrements now). Serialized per asset.
+  const check = await serialize(`${mandateCfg.agentParty}:${asset}`, () =>
+    CHARGE_MODE ? checkBudget(mandateCfg!, asset, price) : authorizeSpend(mandateCfg!, service, price, asset),
   );
-  if (!auth.ok) {
-    console.log(`[gateway] mandate DENIED (${asset}): ${auth.reason} (budget left ${auth.remaining})`);
-    res.status(403).json({ error: "mandate denied", reason: auth.reason, asset, budgetRemaining: auth.remaining });
+  if (!check.ok) {
+    console.log(`[gateway] mandate DENIED (${asset}): ${check.reason} (budget left ${check.remaining})`);
+    res.status(403).json({ error: "mandate denied", reason: check.reason, asset, budgetRemaining: check.remaining });
     return false;
   }
-  console.log(`[gateway] mandate authorized (${asset}) · budget left ${auth.remaining}`);
+  console.log(`[gateway] mandate ${CHARGE_MODE ? "pre-checked" : "authorized"} (${asset}) · budget left ${check.remaining}`);
+  return true;
+}
+
+/** After payment is verified: in charge mode, atomically decrement the budget and
+ *  mint the on-ledger Receipt bound to the settlement reference. Legacy mode is a
+ *  no-op (Mandate_Authorize already decremented at challenge time). Returns false
+ *  and answers the response if the ledger rejects the charge. */
+async function settleCharge(
+  res: Response,
+  asset: string,
+  service: string,
+  price: string,
+  provider: string,
+  settlementRef: string,
+): Promise<boolean> {
+  if (!mandateCfg || !CHARGE_MODE) return true;
+  const charge = await serialize(`${mandateCfg.agentParty}:${asset}`, () =>
+    chargeSpend(mandateCfg!, provider, service, price, asset, settlementRef),
+  );
+  if (!charge.ok) {
+    console.log(`[gateway] charge REJECTED (${asset}): ${charge.reason}`);
+    res.status(402).json({ error: "charge rejected by ledger", reason: charge.reason, asset });
+    return false;
+  }
+  console.log(`[gateway] charged ${price} ${asset} on-ledger · receipt ↔ ${settlementRef.slice(0, 16)}… · budget left ${charge.remaining}`);
   return true;
 }
 
@@ -237,12 +268,16 @@ app.get("/svc/:id", async (req, res) => {
       reference: charge.reference,
     });
   }
-  let paid = false;
-  for (let i = 0; i < 6 && !paid; i++) {
-    paid = Boolean(isToken ? await verifyTokenCharge(ref, txId) : await verifyCharge(ref));
-    if (!paid) await new Promise((r) => setTimeout(r, 2000));
+  let settled: { eventId?: string; txId?: string } | null = null;
+  for (let i = 0; i < 6 && !settled; i++) {
+    settled = isToken ? await verifyTokenCharge(ref, txId) : await verifyCharge(ref);
+    if (!settled) await new Promise((r) => setTimeout(r, 2000));
   }
-  if (!paid) return res.status(402).json({ error: "payment not found on-ledger", reference: ref });
+  if (!settled) return res.status(402).json({ error: "payment not found on-ledger", reference: ref });
+
+  // Payment verified — atomically charge the mandate + mint the receipt (charge mode).
+  const settlementRef = (isToken ? settled.txId || txId : settled.eventId) ?? ref;
+  if (!(await settleCharge(res, listing.priceAsset, listing.id, listing.priceAmount, listing.provider, settlementRef))) return;
 
   // Paid — proxy to the provider's API and return its response.
   try {
@@ -341,6 +376,8 @@ for (const [path, svc] of Object.entries(TOKEN_SERVICES)) {
       const s = await verifyTokenCharge(ref, txId);
       if (s) {
         console.log(`[gateway] verified ${s.price} ${svc.asset} for ${service} (${ref})`);
+        const settlementRef = s.txId || txId || ref;
+        if (!(await settleCharge(res, svc.asset, service, svc.price, PROVIDER_PARTY, settlementRef))) return;
         return next();
       }
       await new Promise((r) => setTimeout(r, 2000));
@@ -390,6 +427,8 @@ app.use("/stats", async (req, res, next) => {
       console.log(
         `[gateway] verified ${settledCharge.price} CC (${ref}) event ${settledCharge.eventId.slice(0, 18)}…`,
       );
+      const settlementRef = settledCharge.eventId || ref;
+      if (!(await settleCharge(res, "CC", "canton-stats", PRICE_CC, MERCHANT_PARTY, settlementRef))) return;
       return next();
     }
     await new Promise((r) => setTimeout(r, 2000));

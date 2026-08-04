@@ -13,7 +13,7 @@ import "dotenv/config";
 
 const LEDGER = "https://ledger-api-json.participant.hackcanton-01.devnet.naas.noders.services:443";
 const KEYCLOAK = "https://keycloak.naas.noders.services/realms/noders-appsfactory/protocol/openid-connect/token";
-const PKG = "322deec212e394ac80e87c3d69503d76eb4d01311fe1168d57e3e17e12a56b5f";
+const PKG = process.env.VANTON_PACKAGE_ID ?? "322deec212e394ac80e87c3d69503d76eb4d01311fe1168d57e3e17e12a56b5f";
 const NS = "122003aa7c491e00a453145c4d2cd3dbf5db8908b4e663c9944baed57fd66effa668";
 const P = (name) => `vanton-${name}::${NS}`;
 
@@ -55,7 +55,7 @@ async function submit(actAs, command) {
   });
 }
 
-async function activeCid(party, endsWith, asset) {
+async function activeCid(party, endsWith, asset, pkg) {
   const { offset } = await j("/v2/state/ledger-end");
   const acs = await j("/v2/state/active-contracts", {
     method: "POST",
@@ -63,7 +63,11 @@ async function activeCid(party, endsWith, asset) {
   });
   for (const c of acs) {
     const ce = c?.contractEntry?.JsActiveContract?.createdEvent;
-    if (ce?.templateId?.endsWith(endsWith) && (!asset || ce.createArgument?.asset === asset)) return ce.contractId;
+    if (
+      ce?.templateId?.endsWith(endsWith) &&
+      (!pkg || ce.templateId.startsWith(pkg)) &&
+      (!asset || ce.createArgument?.asset === asset)
+    ) return ce.contractId;
   }
   return null;
 }
@@ -80,7 +84,7 @@ const ASSETS = [
 // (exactly what you set is available) instead of stacking on top of leftovers.
 let stale;
 let revoked = 0;
-while ((stale = await activeCid(P("agent"), ":AgentMandate"))) {
+while ((stale = await activeCid(P("agent"), ":AgentMandate", null, PKG))) {
   await submit(P("owner"), {
     ExerciseCommand: { templateId: `${PKG}:Vanton.Marketplace:AgentMandate`, contractId: stale, choice: "Mandate_Revoke", choiceArgument: {} },
   });
