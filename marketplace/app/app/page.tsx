@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Activity, Lock, Plus, RefreshCw, Search, Server, Wallet, X, Zap } from "lucide-react";
+import { Activity, Check, Copy, Lock, Plus, RefreshCw, Search, Server, Wallet, X, Zap } from "lucide-react";
 import { SiteFooter } from "../_components/site-footer";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3402";
@@ -383,7 +383,7 @@ export default function Home() {
                       <button
                         type="button"
                         onClick={setLimit}
-                        disabled={settingBudget}
+                        disabled={settingBudget || agentRunning}
                         aria-busy={settingBudget}
                         className="inline-flex h-8 items-center rounded-md border border-line bg-panel2 px-3 text-xs font-medium text-text transition-colors hover:border-accent/50 disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
                       >
@@ -441,11 +441,12 @@ export default function Home() {
                 <button
                   type="button"
                   onClick={runAgent}
-                  disabled={agentRunning}
+                  disabled={agentRunning || settingBudget}
                   aria-busy={agentRunning}
+                  title={settingBudget ? "Setting spend limits…" : undefined}
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-md bg-accent px-5 text-sm font-semibold text-onaccent transition-colors hover:bg-accent/90 active:translate-y-px disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
                 >
-                  {agentRunning ? "Running…" : "Run agent"}
+                  {agentRunning ? "Running…" : settingBudget ? "Setting limits…" : "Run agent"}
                 </button>
               </div>
               {agentRunning && !agentOutput && (
@@ -930,17 +931,53 @@ function ActivityTable({ rows }: { rows: Settled[] }) {
               <td className="px-4 py-3.5 font-mono text-xs text-muted" title={r.sender}>
                 {shortParty(r.sender)}
               </td>
-              <td className="px-4 py-3.5 font-mono text-xs text-muted" title={r.eventId || "settled on-ledger"}>
-                <span className="inline-flex items-center gap-1.5">
-                  <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-good" aria-hidden />
-                  {r.eventId ? shortEvent(r.eventId) : "settled"}
-                </span>
+              <td className="px-4 py-3.5">
+                <CopyableId id={r.eventId} />
               </td>
             </tr>
           ))}
         </tbody>
       </table>
     </div>
+  );
+}
+
+// The on-ledger reference for a settlement. Canton has no public block explorer
+// (payments are private, visible only to their parties), so verification is via
+// the ledger API as a stakeholder — we make the reference easy to copy for that.
+function CopyableId({ id }: { id: string }) {
+  const [copied, setCopied] = useState(false);
+  if (!id) {
+    return (
+      <span className="inline-flex items-center gap-1.5 font-mono text-xs text-muted">
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-good" aria-hidden />
+        settled
+      </span>
+    );
+  }
+  return (
+    <button
+      type="button"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(id);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1200);
+        } catch {
+          /* clipboard blocked — the title still shows the full id */
+        }
+      }}
+      title={`${id} — click to copy the on-ledger reference`}
+      className="inline-flex items-center gap-1.5 rounded font-mono text-xs text-muted transition-colors hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+    >
+      <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-good" aria-hidden />
+      {copied ? "copied" : shortEvent(id)}
+      {copied ? (
+        <Check className="h-3 w-3 text-good" aria-hidden />
+      ) : (
+        <Copy className="h-3 w-3 opacity-50" aria-hidden />
+      )}
+    </button>
   );
 }
 
