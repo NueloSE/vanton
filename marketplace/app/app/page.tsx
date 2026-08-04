@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Activity, Plus, RefreshCw, Search, Server, Wallet, X, Zap } from "lucide-react";
+import { Activity, Lock, Plus, RefreshCw, Search, Server, Wallet, X, Zap } from "lucide-react";
 import { SiteFooter } from "../_components/site-footer";
 
 const GATEWAY = process.env.NEXT_PUBLIC_GATEWAY_URL ?? "http://localhost:3402";
@@ -27,6 +27,12 @@ const ACTIVITY_CAP = 20; // activity rows shown before the "View all" toggle
 const ADMIN_KEY_LS = "vanton_admin_key";
 const getAdminKey = () =>
   typeof window === "undefined" ? "" : window.localStorage.getItem(ADMIN_KEY_LS) ?? "";
+
+// The dashboard registers a themed key prompt here so adminFetch can ask for the
+// operator key in-theme (not the browser's generic dialog). Falls back to
+// window.prompt if the UI hasn't mounted yet.
+let requestOperatorKey: (() => Promise<string>) | null = null;
+
 async function adminFetch(url: string, init: RequestInit): Promise<Response> {
   const withKey = (k: string): RequestInit => ({
     ...init,
@@ -34,7 +40,9 @@ async function adminFetch(url: string, init: RequestInit): Promise<Response> {
   });
   let res = await fetch(url, withKey(getAdminKey()));
   if (res.status === 401 && typeof window !== "undefined") {
-    const k = window.prompt("Operator key required for this action:") ?? "";
+    const k = requestOperatorKey
+      ? await requestOperatorKey()
+      : window.prompt("Operator key required for this action:") ?? "";
     if (k) {
       window.localStorage.setItem(ADMIN_KEY_LS, k);
       res = await fetch(url, withKey(k));
@@ -92,6 +100,8 @@ export default function Home() {
   const [budgetCBTC, setBudgetCBTC] = useState("0.005");
   const [budgetCETH, setBudgetCETH] = useState("0.05");
   const [settingBudget, setSettingBudget] = useState(false);
+  const [showKeyModal, setShowKeyModal] = useState(false);
+  const keyResolver = useRef<((k: string) => void) | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [serviceQuery, setServiceQuery] = useState("");
   const [serviceCategory, setServiceCategory] = useState("all");
@@ -199,6 +209,25 @@ export default function Home() {
       if (timer.current) clearInterval(timer.current);
     };
   }, [load]);
+
+  // Let module-level adminFetch ask this component for the operator key via a
+  // themed modal, resolving the promise when the operator submits or cancels.
+  useEffect(() => {
+    requestOperatorKey = () =>
+      new Promise<string>((resolve) => {
+        keyResolver.current = resolve;
+        setShowKeyModal(true);
+      });
+    return () => {
+      requestOperatorKey = null;
+    };
+  }, []);
+
+  const resolveKey = useCallback((k: string) => {
+    setShowKeyModal(false);
+    keyResolver.current?.(k);
+    keyResolver.current = null;
+  }, []);
 
   const stats = useMemo(() => {
     // Volume is CC-only (assets don't sum); per-asset totals live in the wallet strip.
@@ -560,6 +589,96 @@ export default function Home() {
           }}
         />
       )}
+
+      {showKeyModal && (
+        <OperatorKeyModal onSubmit={(k) => resolveKey(k)} onCancel={() => resolveKey("")} />
+      )}
+    </div>
+  );
+}
+
+// A themed replacement for the browser's window.prompt — asked for on a 401 from
+// a privileged action so the operator can supply the key in-theme.
+function OperatorKeyModal({
+  onSubmit,
+  onCancel,
+}: {
+  onSubmit: (k: string) => void;
+  onCancel: () => void;
+}) {
+  const [key, setKey] = useState("");
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    inputRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onCancel();
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onCancel]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="key-title"
+      onClick={onCancel}
+    >
+      <div
+        className="w-full max-w-sm rounded-lg border border-line bg-panel p-6 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-line bg-panel2 text-accent">
+            <Lock className="h-5 w-5" aria-hidden />
+          </span>
+          <h2 id="key-title" className="text-lg font-bold tracking-tight">
+            Operator key
+          </h2>
+        </div>
+        <p className="mt-3 text-sm leading-relaxed text-muted">
+          This action changes on-ledger state and moves funds, so it needs the operator key.
+          Browsing the marketplace stays open without it.
+        </p>
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            onSubmit(key.trim());
+          }}
+          className="mt-4 flex flex-col gap-3"
+        >
+          <label htmlFor="operator-key" className="sr-only">
+            Operator key
+          </label>
+          <input
+            id="operator-key"
+            ref={inputRef}
+            type="password"
+            value={key}
+            onChange={(e) => setKey(e.target.value)}
+            placeholder="Paste the operator key"
+            autoComplete="off"
+            className={`${inputCls} font-mono text-xs`}
+          />
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="inline-flex h-10 items-center rounded-md border border-line bg-panel2 px-4 text-sm font-medium text-text transition-colors hover:border-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={!key.trim()}
+              className="inline-flex h-10 items-center gap-2 rounded-md bg-accent px-4 text-sm font-semibold text-onaccent transition-colors hover:bg-accent/90 active:translate-y-px disabled:opacity-60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-ink"
+            >
+              <Lock className="h-4 w-4" aria-hidden />
+              Unlock
+            </button>
+          </div>
+        </form>
+      </div>
     </div>
   );
 }
