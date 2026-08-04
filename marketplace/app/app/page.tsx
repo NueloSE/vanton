@@ -100,6 +100,7 @@ export default function Home() {
   const [budgetCBTC, setBudgetCBTC] = useState("0.005");
   const [budgetCETH, setBudgetCETH] = useState("0.05");
   const [settingBudget, setSettingBudget] = useState(false);
+  const [budgetMsg, setBudgetMsg] = useState<{ ok: boolean; text: string } | null>(null);
   const [showKeyModal, setShowKeyModal] = useState(false);
   const keyResolver = useRef<((k: string) => void) | null>(null);
   const timer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -163,14 +164,25 @@ export default function Home() {
   // Set / refill the agent's on-ledger spending limit (creates fresh mandates).
   const setLimit = useCallback(async () => {
     setSettingBudget(true);
+    setBudgetMsg(null);
     try {
-      await adminFetch(`${GATEWAY}/set-budget`, {
+      const r = await adminFetch(`${GATEWAY}/set-budget`, {
         method: "POST",
         body: JSON.stringify({ budgetCC, budgetCBTC, budgetCETH }),
       });
+      if (r.status === 401) {
+        setBudgetMsg({ ok: false, text: "Operator key required — limits NOT changed." });
+        return;
+      }
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || d.ok === false) {
+        setBudgetMsg({ ok: false, text: "Failed to set limits on-ledger — try again." });
+        return;
+      }
+      setBudgetMsg({ ok: true, text: `Set on-ledger — CC ${budgetCC} · cBTC ${budgetCBTC} · cETH ${budgetCETH}` });
       load();
     } catch {
-      /* ignore */
+      setBudgetMsg({ ok: false, text: "Couldn't reach the gateway." });
     } finally {
       setSettingBudget(false);
     }
@@ -386,6 +398,15 @@ export default function Home() {
                     {limitWarnings.length > 0 && (
                       <p className="mt-2.5 font-mono text-[11px] leading-relaxed text-accent/90">
                         {limitWarnings.join(" · ")}
+                      </p>
+                    )}
+                    {budgetMsg && (
+                      <p
+                        className={`mt-2 font-mono text-[11px] leading-relaxed ${
+                          budgetMsg.ok ? "text-good" : "text-bad"
+                        }`}
+                      >
+                        {budgetMsg.text}
                       </p>
                     )}
                   </div>
