@@ -17,7 +17,7 @@
 import "dotenv/config";
 import { spawn } from "node:child_process";
 import path from "node:path";
-import express, { type Response } from "express";
+import express, { type Request, type Response, type NextFunction } from "express";
 import { authorizeSpend, type MandateCheckConfig } from "./mandate.js";
 import { issueCharge, verifyCharge, activityFeed } from "./devnet-pay.js";
 import { issueTokenCharge, verifyTokenCharge, tokenActivity } from "./token-verify.js";
@@ -48,10 +48,43 @@ app.use(express.json());
 // The marketplace UI (localhost:3400) reads /listings and /activity cross-origin.
 app.use((req, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "content-type, x-vanton-mandate, x-vanton-payment");
+  res.setHeader("Access-Control-Allow-Headers", "content-type, x-vanton-mandate, x-vanton-payment, x-admin-key, x-vanton-tx");
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
+
+// ---------------------------------------------------------------------------
+// Admin auth. The state-changing endpoints (list a service, set the spend
+// budget, run the agent — which moves real funds) require a shared operator key
+// so a stranger who finds the public gateway URL can't drain the wallet or
+// rewrite the mandates. Read endpoints stay open so anyone can explore.
+// ---------------------------------------------------------------------------
+const ADMIN_KEY = process.env.ADMIN_KEY;
+if (!ADMIN_KEY) {
+  console.warn(
+    "[gateway] ADMIN_KEY not set — admin endpoints are OPEN (dev mode). Set ADMIN_KEY to require x-admin-key on POST /listings, /set-budget, /run-agent.",
+  );
+}
+function requireAdmin(req: Request, res: Response, next: NextFunction): void {
+  if (!ADMIN_KEY) return next(); // dev convenience; warned at startup
+  if (req.header("x-admin-key") !== ADMIN_KEY) {
+    res.status(401).json({ error: "unauthorized", detail: "admin key required (send x-admin-key)" });
+    return;
+  }
+  next();
+}
+
+// Serialize on-ledger mandate authorization per (agent, asset). Mandate_Authorize
+// is a consuming choice, so two concurrent calls read the same mandate and one
+// loses on contract contention — surfaced as a spurious refusal. Running them
+// one-at-a-time per asset keeps budget accounting clean and the refusal honest.
+const authChains = new Map<string, Promise<unknown>>();
+function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
+  const prev = authChains.get(key) ?? Promise.resolve();
+  const run = prev.then(task, task);
+  authChains.set(key, run.catch(() => {}));
+  return run;
+}
 
 // ---------------------------------------------------------------------------
 // Marketplace data (free endpoints; the UI reads these)
@@ -119,7 +152,9 @@ const mandateCfg: MandateCheckConfig | null = mandateEnabled
  *  no mandate configured); otherwise responds 403 and returns false. */
 async function enforceMandate(res: Response, asset: string, service: string, price: string): Promise<boolean> {
   if (!mandateCfg) return true;
-  const auth = await authorizeSpend(mandateCfg, service, price, asset);
+  const auth = await serialize(`${mandateCfg.agentParty}:${asset}`, () =>
+    authorizeSpend(mandateCfg!, service, price, asset),
+  );
   if (!auth.ok) {
     console.log(`[gateway] mandate DENIED (${asset}): ${auth.reason} (budget left ${auth.remaining})`);
     res.status(403).json({ error: "mandate denied", reason: auth.reason, asset, budgetRemaining: auth.remaining });
@@ -147,7 +182,7 @@ const DEMO_IDS = new Set(["canton-stats", "eth-signal", "btc-price"]);
   if (persisted.listings.length) console.log(`[gateway] restored ${persisted.listings.length} user listing(s)`);
 }
 
-app.post("/listings", (req, res) => {
+app.post("/listings", requireAdmin, (req, res) => {
   const { name, provider, priceAmount, priceAsset, category, targetUrl, description } =
     req.body ?? {};
   if (!name || !provider || !priceAmount) {
@@ -188,6 +223,7 @@ app.get("/svc/:id", async (req, res) => {
   if (!listing || !target) return res.status(404).json({ error: "no such service" });
   const isToken = listing.priceAsset === "cBTC" || listing.priceAsset === "cETH";
   const ref = req.header("x-vanton-payment");
+  const txId = req.header("x-vanton-tx") ?? "";
 
   if (!ref) {
     if (!(await enforceMandate(res, listing.priceAsset, listing.id, listing.priceAmount))) return;
@@ -203,7 +239,7 @@ app.get("/svc/:id", async (req, res) => {
   }
   let paid = false;
   for (let i = 0; i < 6 && !paid; i++) {
-    paid = Boolean(isToken ? await verifyTokenCharge(ref) : await verifyCharge(ref));
+    paid = Boolean(isToken ? await verifyTokenCharge(ref, txId) : await verifyCharge(ref));
     if (!paid) await new Promise((r) => setTimeout(r, 2000));
   }
   if (!paid) return res.status(402).json({ error: "payment not found on-ledger", reference: ref });
@@ -220,7 +256,7 @@ app.get("/svc/:id", async (req, res) => {
 
 // Set / refill the agent's on-ledger spending limits (creates fresh per-asset
 // mandates). Powers the UI "Set budget" control so limits are set without a terminal.
-app.post("/set-budget", (req, res) => {
+app.post("/set-budget", requireAdmin, (req, res) => {
   const { budgetCC, budgetCBTC, budgetCETH } = req.body ?? {};
   const env = { ...process.env };
   if (budgetCC) env.BUDGET_CC = String(budgetCC);
@@ -256,7 +292,7 @@ app.get("/activity", (_req, res) => {
   // Merge CC settlements + wrapped-asset settlements, newest first.
   const agentParty = process.env.VANTON_AGENT_PARTY ?? "vanton-agent";
   const cc = activityFeed().map((s) => ({ ...s, asset: "CC" }));
-  const tok = tokenActivity().map((s) => ({ reference: s.reference, price: s.price, service: s.service, settledAt: s.settledAt, eventId: "", sender: agentParty, asset: s.asset }));
+  const tok = tokenActivity().map((s) => ({ reference: s.reference, price: s.price, service: s.service, settledAt: s.settledAt, eventId: s.txId, sender: agentParty, asset: s.asset }));
   const activity = [...cc, ...tok].sort((a, b) => (a.settledAt < b.settledAt ? 1 : -1));
   res.json({ activity });
 });
@@ -271,7 +307,7 @@ app.get("/free-sample", (_req, res) =>
 // button so anyone can trigger a full demo with one click (no terminal). The
 // agent runs in its own package dir (its .env holds the OpenAI + wallet creds).
 const stripAnsi = (s: string) => s.replace(/\x1b\[[0-9;]*m/g, "");
-app.post("/run-agent", (req, res) => {
+app.post("/run-agent", requireAdmin, (req, res) => {
   const task = String(req.body?.task || "Get me the current BTC price from the oracle.").slice(0, 300);
   const agentDir = path.join(process.cwd(), "..", "agent");
   const proc = spawn("npx", ["tsx", "src/ai-agent.ts", task], { cwd: agentDir });
@@ -295,13 +331,14 @@ for (const [path, svc] of Object.entries(TOKEN_SERVICES)) {
   const service = path.slice(1);
   app.use(path, async (req, res, next) => {
     const ref = req.header("x-vanton-payment");
+    const txId = req.header("x-vanton-tx") ?? "";
     if (!ref) {
       if (!(await enforceMandate(res, svc.asset, service, svc.price))) return;
       const charge = await issueTokenCharge(service, svc.asset, svc.price, PROVIDER_PARTY);
       return res.status(402).json({ price: charge.price, payTo: PROVIDER_PARTY, asset: svc.asset, reference: charge.reference });
     }
     for (let attempt = 0; attempt < 6; attempt++) {
-      const s = await verifyTokenCharge(ref);
+      const s = await verifyTokenCharge(ref, txId);
       if (s) {
         console.log(`[gateway] verified ${s.price} ${svc.asset} for ${service} (${ref})`);
         return next();

@@ -20,6 +20,29 @@ const POLL_MS = 5000;
 const SERVICES_CAP = 6; // services shown before the "Show all" toggle
 const ACTIVITY_CAP = 20; // activity rows shown before the "View all" toggle
 
+// The gateway's state-changing endpoints (set-budget, run-agent, list service)
+// require the operator key. We send it if we have one, and only prompt on a 401
+// (so local dev with an unprotected gateway is never interrupted). The key is
+// remembered for the session so the operator enters it once.
+const ADMIN_KEY_LS = "vanton_admin_key";
+const getAdminKey = () =>
+  typeof window === "undefined" ? "" : window.localStorage.getItem(ADMIN_KEY_LS) ?? "";
+async function adminFetch(url: string, init: RequestInit): Promise<Response> {
+  const withKey = (k: string): RequestInit => ({
+    ...init,
+    headers: { "content-type": "application/json", ...(k ? { "x-admin-key": k } : {}) },
+  });
+  let res = await fetch(url, withKey(getAdminKey()));
+  if (res.status === 401 && typeof window !== "undefined") {
+    const k = window.prompt("Operator key required for this action:") ?? "";
+    if (k) {
+      window.localStorage.setItem(ADMIN_KEY_LS, k);
+      res = await fetch(url, withKey(k));
+    }
+  }
+  return res;
+}
+
 interface Listing {
   id: string;
   name: string;
@@ -131,9 +154,8 @@ export default function Home() {
   const setLimit = useCallback(async () => {
     setSettingBudget(true);
     try {
-      await fetch(`${GATEWAY}/set-budget`, {
+      await adminFetch(`${GATEWAY}/set-budget`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({ budgetCC, budgetCBTC, budgetCETH }),
       });
       load();
@@ -149,13 +171,16 @@ export default function Home() {
     setAgentRunning(true);
     setAgentOutput(null);
     try {
-      const r = await fetch(`${GATEWAY}/run-agent`, {
+      const r = await adminFetch(`${GATEWAY}/run-agent`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify({
           task: agentTask || "Get me the current BTC price, then a premium ETH momentum signal.",
         }),
       });
+      if (r.status === 401) {
+        setAgentOutput("Operator key required to run the agent.");
+        return;
+      }
       const d = await r.json();
       setAgentOutput(d.output || "(no output)");
       load();
@@ -854,14 +879,17 @@ function ListServiceModal({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`${gateway}/listings`, {
+      const res = await adminFetch(`${gateway}/listings`, {
         method: "POST",
-        headers: { "content-type": "application/json" },
         body: JSON.stringify(form),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || `Request failed (${res.status})`);
+        throw new Error(
+          res.status === 401
+            ? "Operator key required to list a service."
+            : data.error || `Request failed (${res.status})`,
+        );
       }
       onListed();
     } catch (err) {

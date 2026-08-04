@@ -16,6 +16,7 @@ CANTON_PASSWORD=<devnet wallet password>
 CANTON_X402_PAYTO=ff34445b-...::122003aa...        # CC payee (your party)
 CANTON_X402_FACILITATOR, CANTON_X402_DSO, CANTON_SYNCHRONIZER_ID   # from x402 setup (optional)
 OPENAI_API_KEY=<key>                               # the agent's brain
+ADMIN_KEY=<a long random string>                   # protects /listings, /set-budget, /run-agent
 # On-ledger mandate (from: node gateway/scripts/setup-devnet-mandate.mjs):
 VANTON_PACKAGE_ID=322deec2...
 LOCAL_LEDGER_API_URL=https://ledger-api-json.participant.hackcanton-01.devnet.naas.noders.services:443

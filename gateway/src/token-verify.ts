@@ -47,7 +47,7 @@ export interface TokenCharge {
   reference: string; service: string; asset: string; price: string; provider: string;
   snapshot: number; issuedAt: number;
 }
-export interface SettledToken extends TokenCharge { settledAt: string }
+export interface SettledToken extends TokenCharge { settledAt: string; txId: string }
 
 const pending = new Map<string, TokenCharge>();
 const settled: SettledToken[] = [];
@@ -62,13 +62,19 @@ export async function issueTokenCharge(service: string, asset: string, price: st
   return charge;
 }
 
-export async function verifyTokenCharge(reference: string): Promise<SettledToken | null> {
+/**
+ * Confirm the provider actually received the asset (balance delta — the trust
+ * anchor, independent of the agent's claim). `txId` is the transfer's on-ledger
+ * updateId, supplied by the payer for verifiable lookup; the balance check is
+ * what proves the payment, txId is the pointer a third party uses to verify it.
+ */
+export async function verifyTokenCharge(reference: string, txId = ""): Promise<SettledToken | null> {
   const c = pending.get(reference);
   if (!c) return null;
   const bal = await assetBalance(c.asset, c.provider);
   if (bal + 1e-9 >= c.snapshot + Number(c.price)) {
     pending.delete(reference);
-    const rec: SettledToken = { ...c, settledAt: new Date().toISOString() };
+    const rec: SettledToken = { ...c, settledAt: new Date().toISOString(), txId };
     settled.unshift(rec);
     if (settled.length > 200) settled.pop();
     return rec;

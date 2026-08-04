@@ -76,10 +76,11 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
   log(c.dim(`      402 → pay ${ch.price} ${ch.asset} to ${ch.payTo.slice(0, 16)}…`));
 
   // Route settlement by the asset the provider priced the service in.
+  let txId = "";
   if (ch.asset === "cBTC" || ch.asset === "cETH") {
     const payer = AGENT_PARTY || (await getPartyId()); // spend from the agent's own wallet
-    const updateId = await payToken(ch.asset, ch.price, payer, ch.payTo);
-    log(c.teal(`      settled ${ch.price} ${ch.asset} from agent wallet (${updateId.slice(0, 12)}…)`));
+    txId = await payToken(ch.asset, ch.price, payer, ch.payTo);
+    log(c.teal(`      settled ${ch.price} ${ch.asset} from agent wallet (${txId.slice(0, 12)}…)`));
   } else {
     await payDirect(ch.payTo, ch.price, ch.reference); // CC via validator API
     log(c.teal(`      paid ${ch.price} CC on-ledger`));
@@ -87,8 +88,11 @@ async function buyService(listing: Listing): Promise<{ ok: boolean; data?: strin
 
   spent[ch.asset] = (spent[ch.asset] ?? 0) + Number(ch.price);
 
-  // The gateway verifies by the charge reference (for both rails).
-  const dataRes = await fetch(url, { headers: { "x-vanton-payment": ch.reference } });
+  // Retry with the charge reference (gateway verifies both rails by it) plus the
+  // transfer's on-ledger updateId, so the settlement carries a verifiable ref.
+  const headers: Record<string, string> = { "x-vanton-payment": ch.reference };
+  if (txId) headers["x-vanton-tx"] = txId;
+  const dataRes = await fetch(url, { headers });
   if (!dataRes.ok) return { ok: false, error: `retry failed ${dataRes.status}` };
   return { ok: true, data: await dataRes.text() };
 }
