@@ -136,6 +136,36 @@ template AgentMandate
         newMandate <- create this with budgetRemaining = budgetRemaining - amount
         pure (newMandate, auth)
 
+    -- Atomic charge: decrement the budget AND write the settlement receipt in a
+    -- SINGLE transaction. The gateway exercises this only after it has verified
+    -- the agent's payment landed on-ledger, passing that payment's on-ledger
+    -- reference (`settlementRef`). Because it is one transaction, you can never
+    -- have a budget decrement without its receipt, or a receipt without the
+    -- decrement — authorization and receipt are atomic, and the receipt is bound
+    -- to the real settlement. (Fusing the asset transfer itself into this same
+    -- transaction — via the CIP-56 Holding/Transfer interface — is the next step;
+    -- here settlement is verified-then-charged rather than co-exercised.)
+    choice Mandate_Charge : (ContractId AgentMandate, ContractId Receipt)
+      with
+        provider : Party
+        serviceName : Text
+        amount : Decimal
+        settlementRef : Text  -- the settled payment's on-ledger update/tx id
+      controller agent
+      do
+        now <- getTime
+        assertMsg "amount must be positive" (amount > 0.0)
+        assertMsg "amount exceeds per-call cap" (amount <= perCallCap)
+        assertMsg "amount exceeds remaining budget" (amount <= budgetRemaining)
+        assertMsg "mandate expired" (now < validUntil)
+        assertMsg "missing settlement reference" (settlementRef /= "")
+        receipt <- create Receipt with
+          operator; owner; agent; provider
+          serviceName; amount; asset
+          settlementRef; chargedAt = now
+        newMandate <- create this with budgetRemaining = budgetRemaining - amount
+        pure (newMandate, receipt)
+
     -- Owner can add budget or revoke the allowance at any time.
     choice Mandate_TopUp : ContractId AgentMandate
       with additional : Decimal
@@ -200,6 +230,29 @@ template CallReceipt
   where
     signatory provider
     observer owner, agent
+
+-- The atomic settlement receipt written by `Mandate_Charge`, in the same
+-- transaction as the budget decrement. Signed by owner + agent (the mandate's
+-- own signatories, so the charge can create it directly — no separate provider
+-- step to leave "unfulfilled"), and observed by the provider + operator so both
+-- sides of the trade hold the proof. `settlementRef` is the paid transfer's
+-- on-ledger id, making every receipt independently verifiable. A third party is
+-- neither signatory nor observer, so the billing stays private — Canton enforces
+-- that, which the transparent x402 chains cannot.
+template Receipt
+  with
+    operator : Party
+    owner : Party
+    agent : Party
+    provider : Party
+    serviceName : Text
+    amount : Decimal
+    asset : Asset
+    settlementRef : Text
+    chargedAt : Time
+  where
+    signatory owner, agent
+    observer provider, operator
 
 --------------------------------------------------------------------------------
 -- Operator bootstrap (marketplace root / access-control anchor)
